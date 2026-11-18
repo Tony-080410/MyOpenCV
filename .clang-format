@@ -1,0 +1,8 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+ContinuationIndentWidth: 4
+ColumnLimit: 100
+# 行尾注释不堆到同一列，保持一个空格间隔
+AlignTrailingComments: false
+# 单行 if 不拆开
+AllowShortIfStatementsOnASingleLine: WithoutElse
