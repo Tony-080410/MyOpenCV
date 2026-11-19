@@ -1,10 +1,10 @@
-#include "mycv/core/types.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <mycv/core/check.hpp>
 #include <mycv/core/mat.hpp>
+#include <mycv/core/types.hpp>
 #include <mycv/imgproc/geom.hpp>
 #include <stdexcept>
 #include <vector>
