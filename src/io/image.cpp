@@ -44,7 +44,7 @@ int readInt(std::istream &in) {
 }
 
 // maxval后面一个空白字符，CRLF两个空白字符，'\r'之后补一个'\n'
-void eatSeperator(std::istream &in) {
+void eatSeprator(std::istream &in) {
     const int sep = in.get();
     if (sep == '\r' && in.peek() == '\n') {
         in.get();
@@ -71,7 +71,7 @@ Mat imread(const std::string &path) {
 
     if (maxv != 255) throw std::runtime_error("imread: 只支持MAXVAL=255 " + path);
 
-    eatSeperator(in);
+    eatSeprator(in);
 
     const int chans = (kind == '6') ? 3 : 1;
 
