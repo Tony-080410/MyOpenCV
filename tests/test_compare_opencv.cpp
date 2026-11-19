@@ -10,6 +10,7 @@
 
 #include <mycv/core/mat.hpp>
 #include <mycv/imgproc/color.hpp>
+#include <mycv/imgproc/geom.hpp>
 #include <mycv/io/image.hpp>
 
 // CMake 里定义了 MYCV_DATA_DIR；单编这个文件时退回相对路径
@@ -29,14 +30,15 @@ static int g_failed = 0;
         }                                                                                          \
     } while (0)
 
-// 两幅同尺寸单通道图逐像素比，返回最大绝对差
+// 两幅同尺寸图逐像素比（按通道数展开），返回最大绝对差
 static int maxDiff(const mycv::Mat &a, const cv::Mat &b) {
     if (a.rows != b.rows || a.cols != b.cols) return -1;
+    const int cn = mycv::channels(a.type);
     int worst = 0;
     for (int r = 0; r < a.rows; ++r) {
         const uint8_t *pa = a.ptr(r);
         const uint8_t *pb = b.ptr<uint8_t>(r);
-        for (int c = 0; c < a.cols; ++c) {
+        for (int c = 0; c < a.cols * cn; ++c) {
             const int d = pa[c] > pb[c] ? pa[c] - pb[c] : pb[c] - pa[c];
             if (d > worst) worst = d;
         }
@@ -141,11 +143,42 @@ static void testEdge() {
     }
 }
 
+// 5. resize：OpenCV 内部走两阶段定点 + SIMD，逐位对齐不现实，容差 1
+static void testResize() {
+    mycv::Mat mine = makeRandomBGR(48, 64, 11u);
+    cv::Mat ref(mine.rows, mine.cols, CV_8UC3, mine.data, mine.step);
+
+    const int sizes[][2] = {{32, 24}, {128, 96}, {96, 72}, {17, 13}, {200, 150}, {1, 1}};
+    for (const auto &s : sizes) {
+        mycv::Mat m = mycv::resize(mine, {s[0], s[1]}, mycv::INTER_LINEAR);
+        cv::Mat r;
+        cv::resize(ref, r, cv::Size(s[0], s[1]), 0, 0, cv::INTER_LINEAR);
+        CHECK(m.rows == s[1] && m.cols == s[0]);
+        CHECK(m.isContinuous());
+        CHECK(maxDiff(m, r) <= 1);
+    }
+
+    // 恒等变换必须逐字节一致
+    mycv::Mat same = mycv::resize(mine, {64, 48}, mycv::INTER_LINEAR);
+    cv::Mat r;
+    cv::resize(ref, r, cv::Size(64, 48), 0, 0, cv::INTER_LINEAR);
+    CHECK(maxDiff(same, r) == 0);
+
+    // 不连续输入：ROI 直接 resize
+    mycv::Mat sub = mine.roi({7, 5, 40, 30});
+    CHECK(!sub.isContinuous());
+    mycv::Mat up = mycv::resize(sub, {80, 60}, mycv::INTER_LINEAR);
+    cv::Mat upRef;
+    cv::resize(ref(cv::Rect(7, 5, 40, 30)), upRef, cv::Size(80, 60), 0, 0, cv::INTER_LINEAR);
+    CHECK(maxDiff(up, upRef) <= 1);
+}
+
 int main() {
     testFromFile();
     testRandom();
     testRoi();
     testEdge();
+    testResize();
 
     if (g_failed == 0) {
         std::printf("test_compare_opencv: all passed\n");
