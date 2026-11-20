@@ -64,4 +64,38 @@ Mat convolve2D(const Mat &src, const Mat &kernel, Point anchor) {
     return dst;
 }
 
+Mat blur(const Mat &src, Size ksize) {
+    MYCV_ASSERT(!src.empty());
+    if (ksize.width <= 0 || ksize.height <= 0 || ksize.width % 2 == 0 || ksize.height % 2 == 0)
+        throw std::runtime_error("blur: ksize 必须是正的奇数");
+
+    Mat k;
+    k.create(ksize.height, ksize.width, F32C1);
+    const float w = 1.0f / static_cast<float>(ksize.width * ksize.height);
+    for (int r = 0; r < k.rows; ++r)
+        for (int c = 0; c < k.cols; ++c)
+            k.at<float>(r, c) = w;
+
+    return convolve2D(src, k);
+}
+
+Mat sobel(const Mat &src, int dx, int dy, int ksize) {
+    MYCV_ASSERT(!src.empty());
+    if (ksize != 3) throw std::runtime_error("sobel: 目前只支持 ksize=3");
+    if (dx < 0 || dy < 0 || dx + dy != 1) throw std::runtime_error("sobel: 只支持 dx+dy==1");
+
+    // OpenCV 的 Sobel 不做归一化，核和是 0；8U 输出会大量饱和到 0/255
+    static const float kx[9] = {-1, 0, 1, -2, 0, 2, -1, 0, 1};
+    static const float ky[9] = {-1, -2, -1, 0, 0, 0, 1, 2, 1};
+    const float *src9 = (dx == 1) ? kx : ky;
+
+    Mat k;
+    k.create(3, 3, F32C1);
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            k.at<float>(r, c) = src9[r * 3 + c];
+
+    return convolve2D(src, k);
+}
+
 } // namespace mycv
