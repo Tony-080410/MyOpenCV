@@ -62,7 +62,7 @@ core/mat.hpp         Mat                       完成
 io/image.hpp         imread / imwrite          完成（P5/P6）
 imgproc/color.hpp    cvtColor                  完成（BGR2GRAY）
 imgproc/geom.hpp     resize                    完成（INTER_LINEAR）
-imgproc/thresh.hpp   threshold                 未实现
+imgproc/thresh.hpp   threshold                 完成（5 种 type）
 imgproc/filter.hpp   blur / sobel              未实现
 imgproc/morph.hpp    erode / dilate            未实现
 imgproc/draw.hpp     line / rect / putText     未实现
@@ -173,12 +173,29 @@ Mat resize(const Mat& src, Size dstSize, int interpolation = INTER_LINEAR);
 
 测试：六种目标尺寸 + 恒等变换 + ROI 输入。恒等和 0.5 倍缩放零差异，其余比例允许差 1。
 
+## imgproc — threshold
+
+```cpp
+Mat threshold(const Mat& src, double thresh, double maxval, int type);
+```
+
+目前支持五种 type：`BINARY` / `BINARY_INV` / `TRUNC` / `TOZERO` / `TOZERO_INV`，枚举值和 OpenCV 相同（0~4）。
+
+- 比较用 `>` （不用 `>=`）：等于阈值的像素归到暗的一侧（踩坑了。。。）
+- `thresh` 用 `floor`，`maxval` 用 `lround`，然后 clamp 到 0..255。两个参数取整方式不同，（抄袭 OpenCV 的处理方式。。。）
+- TRUNC 是 `min(v, t)` 之后必须饱和：`t = -1` 时 `min(v,-1) = -1`，直接赋给 `uint8_t` 会变成 255
+- `dst = src.clone()`：每个分支都要读原值，`clone` 顺便把不连续 ROI 摊平成连续，后面可以一维扫
+- 像素值先提成 `int v`，所有分支在 `int` 域算完，最后一次性转回 `uint8_t`
+
+测试：7 个阈值 × 5 种 type + 6 个 maxval + ROI 输入，**全部零差异**。
+
 ## 和 OpenCV 的差异
 
 | 函数 | 差异 | 测试容差 |
 |---|---|---|
 | cvtColor(BGR2GRAY) | 逐字节一致 | 0 |
 | resize(INTER_LINEAR) | 最大差 1（OpenCV 走两阶段 `ufixedpoint16` + SIMD） | 1 |
+| threshold | 逐字节一致 | 0 |
 | imread / imwrite | 只有 P5/P6、8 位；通道转 BGR | 往返零差异 |
 
 ## 约束
@@ -190,4 +207,4 @@ Mat resize(const Mat& src, Size dstSize, int interpolation = INTER_LINEAR);
 
 ## 计划（2026.11.21）
 
-threshold / blur / sobel / erode / dilate / draw / VideoCapture
+blur / sobel / erode / dilate / draw / VideoCapture
