@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <random>
 #include <string>
+#include <vector>
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp> // cv::imread供测试
@@ -11,6 +12,7 @@
 #include <mycv/core/mat.hpp>
 #include <mycv/imgproc/color.hpp>
 #include <mycv/imgproc/geom.hpp>
+#include <mycv/imgproc/filter.hpp>
 #include <mycv/imgproc/thresh.hpp>
 #include <mycv/io/image.hpp>
 
@@ -39,6 +41,22 @@ static int maxDiff(const mycv::Mat &a, const cv::Mat &b) {
     for (int r = 0; r < a.rows; ++r) {
         const uint8_t *pa = a.ptr(r);
         const uint8_t *pb = b.ptr<uint8_t>(r);
+        for (int c = 0; c < a.cols * cn; ++c) {
+            const int d = pa[c] > pb[c] ? pa[c] - pb[c] : pb[c] - pa[c];
+            if (d > worst) worst = d;
+        }
+    }
+    return worst;
+}
+
+// 两幅 mycv 图之间比
+static int maxDiff(const mycv::Mat &a, const mycv::Mat &b) {
+    if (a.rows != b.rows || a.cols != b.cols) return -1;
+    const int cn = mycv::channels(a.type);
+    int worst = 0;
+    for (int r = 0; r < a.rows; ++r) {
+        const uint8_t *pa = a.ptr(r);
+        const uint8_t *pb = b.ptr(r);
         for (int c = 0; c < a.cols * cn; ++c) {
             const int d = pa[c] > pb[c] ? pa[c] - pb[c] : pb[c] - pa[c];
             if (d > worst) worst = d;
@@ -213,6 +231,116 @@ static void testThreshold() {
     CHECK(maxDiff(ms, rs) == 0);
 }
 
+// 7. convolve2D：九个核，连续输入零容差
+static mycv::Mat makeKernel(int rows, int cols, const std::vector<float> &v) {
+    mycv::Mat k;
+    k.create(rows, cols, mycv::F32C1);
+    for (int r = 0; r < rows; ++r)
+        for (int c = 0; c < cols; ++c)
+            k.at<float>(r, c) = v[static_cast<std::size_t>(r) * cols + c];
+    return k;
+}
+
+static cv::Mat toCvKer(const mycv::Mat &k) {
+    cv::Mat out(k.rows, k.cols, CV_32FC1);
+    for (int r = 0; r < k.rows; ++r)
+        for (int c = 0; c < k.cols; ++c) out.at<float>(r, c) = k.at<float>(r, c);
+    return out;
+}
+
+static void testConvolve() {
+    const float g = 1.0f / 16.0f;
+    struct Kern {
+        const char *name;
+        int rows, cols;
+        std::vector<float> v;
+    };
+    const std::vector<Kern> kernels = {
+        {"identity", 3, 3, {0, 0, 0, 0, 1, 0, 0, 0, 0}},
+        {"box 1/9", 3, 3,
+         {1 / 9.f, 1 / 9.f, 1 / 9.f, 1 / 9.f, 1 / 9.f, 1 / 9.f, 1 / 9.f, 1 / 9.f, 1 / 9.f}},
+        {"gauss 1/16", 3, 3, {g, 2 * g, g, 2 * g, 4 * g, 2 * g, g, 2 * g, g}},
+        {"sobel x", 3, 3, {-1, 0, 1, -2, 0, 2, -1, 0, 1}},
+        {"sobel y", 3, 3, {-1, -2, -1, 0, 0, 0, 1, 2, 1}},
+        {"laplace 4", 3, 3, {0, 1, 0, 1, -4, 1, 0, 1, 0}},
+        {"1x3 mean", 1, 3, {1 / 3.f, 1 / 3.f, 1 / 3.f}},
+        {"2x2 mean", 2, 2, {0.25f, 0.25f, 0.25f, 0.25f}},
+        {"5x5 gauss", 5, 5,
+         {1, 4, 6, 4, 1, 4, 16, 24, 16, 4, 6, 24, 36, 24, 6, 4, 16, 24, 16, 4, 1, 4, 6, 4, 1}},
+    };
+
+    mycv::Mat bgr = makeRandomBGR(40, 50, 7u);
+    cv::Mat bgrRef(bgr.rows, bgr.cols, CV_8UC3, bgr.data, bgr.step);
+
+    // 单通道同一份数据
+    mycv::Mat gray;
+    gray.create(40, 50, mycv::U8C1);
+    for (int r = 0; r < 40; ++r) {
+        const uint8_t *s = bgr.ptr(r);
+        uint8_t *d = gray.ptr(r);
+        for (int i = 0; i < 50; ++i) d[i] = s[i * 3];
+    }
+    cv::Mat grayRef(40, 50, CV_8UC1, gray.data, gray.step);
+
+    for (const auto &kc : kernels) {
+        mycv::Mat k = makeKernel(kc.rows, kc.cols, kc.v);
+        cv::Mat ck = toCvKer(k);
+
+        mycv::Mat mg = mycv::convolve2D(gray, k);
+        cv::Mat rg;
+        cv::filter2D(grayRef, rg, -1, ck, cv::Point(-1, -1), 0, cv::BORDER_REFLECT_101);
+
+        mycv::Mat mc = mycv::convolve2D(bgr, k);
+        cv::Mat rc;
+        cv::filter2D(bgrRef, rc, -1, ck, cv::Point(-1, -1), 0, cv::BORDER_REFLECT_101);
+
+        CHECK(maxDiff(mg, rg) == 0);
+        CHECK(maxDiff(mc, rc) == 0);
+    }
+
+    // 单位核必须逐字节等于原图
+    mycv::Mat ident = makeKernel(3, 3, {0, 0, 0, 0, 1, 0, 0, 0, 0});
+    CHECK(maxDiff(mycv::convolve2D(gray, ident), gray) == 0);
+    CHECK(maxDiff(mycv::convolve2D(bgr, ident), bgr) == 0);
+
+    // 核比图大：3x5 的图 + 5x5 核
+    mycv::Mat tiny = makeRandomBGR(3, 5, 11u);
+    cv::Mat tinyRef(3, 5, CV_8UC3, tiny.data, tiny.step);
+    mycv::Mat k5 = makeKernel(5, 5, kernels.back().v);
+    cv::Mat ck5 = toCvKer(k5);
+    mycv::Mat mt = mycv::convolve2D(tiny, k5);
+    cv::Mat rt;
+    cv::filter2D(tinyRef, rt, -1, ck5, cv::Point(-1, -1), 0, cv::BORDER_REFLECT_101);
+    CHECK(maxDiff(mt, rt) == 0);
+
+    // 不连续输入：cv::filter2D 对 submatrix 有自己的边界路径，结果和 clone 后不同，
+    // 所以这里只验自洽性 + 用 clone 后的连续版本对拍
+    mycv::Mat sub = bgr.roi({10, 5, 20, 15});
+    CHECK(!sub.isContinuous());
+    mycv::Mat kbox = makeKernel(3, 3, kernels[1].v);
+    cv::Mat ckbox = toCvKer(kbox);
+
+    mycv::Mat onRoi = mycv::convolve2D(sub, kbox);
+    mycv::Mat subC = sub.clone();
+    mycv::Mat onClone = mycv::convolve2D(subC, kbox);
+    CHECK(onRoi.isContinuous());
+    CHECK(maxDiff(onRoi, onClone) == 0); // ROI 和 clone 必须等价
+
+    cv::Mat rc;
+    cv::filter2D(bgrRef(cv::Rect(10, 5, 20, 15)).clone(), rc, -1, ckbox, cv::Point(-1, -1), 0,
+                 cv::BORDER_REFLECT_101);
+    CHECK(maxDiff(onClone, rc) == 0);
+
+    // 非法 anchor：-5 不是"默认值"，必须抛
+    int thrown = 0;
+    try {
+        mycv::convolve2D(gray, ident, {-5, 0});
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    CHECK(thrown == 1);
+}
+
 int main() {
     testFromFile();
     testRandom();
@@ -220,6 +348,7 @@ int main() {
     testEdge();
     testResize();
     testThreshold();
+    testConvolve();
 
     if (g_failed == 0) {
         std::printf("test_compare_opencv: all passed\n");
