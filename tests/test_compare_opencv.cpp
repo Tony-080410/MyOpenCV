@@ -11,8 +11,9 @@
 
 #include <mycv/core/mat.hpp>
 #include <mycv/imgproc/color.hpp>
-#include <mycv/imgproc/geom.hpp>
 #include <mycv/imgproc/filter.hpp>
+#include <mycv/imgproc/geom.hpp>
+#include <mycv/imgproc/morph.hpp>
 #include <mycv/imgproc/thresh.hpp>
 #include <mycv/io/image.hpp>
 
@@ -244,7 +245,8 @@ static mycv::Mat makeKernel(int rows, int cols, const std::vector<float> &v) {
 static cv::Mat toCvKer(const mycv::Mat &k) {
     cv::Mat out(k.rows, k.cols, CV_32FC1);
     for (int r = 0; r < k.rows; ++r)
-        for (int c = 0; c < k.cols; ++c) out.at<float>(r, c) = k.at<float>(r, c);
+        for (int c = 0; c < k.cols; ++c)
+            out.at<float>(r, c) = k.at<float>(r, c);
     return out;
 }
 
@@ -257,7 +259,9 @@ static void testConvolve() {
     };
     const std::vector<Kern> kernels = {
         {"identity", 3, 3, {0, 0, 0, 0, 1, 0, 0, 0, 0}},
-        {"box 1/9", 3, 3,
+        {"box 1/9",
+         3,
+         3,
          {1 / 9.f, 1 / 9.f, 1 / 9.f, 1 / 9.f, 1 / 9.f, 1 / 9.f, 1 / 9.f, 1 / 9.f, 1 / 9.f}},
         {"gauss 1/16", 3, 3, {g, 2 * g, g, 2 * g, 4 * g, 2 * g, g, 2 * g, g}},
         {"sobel x", 3, 3, {-1, 0, 1, -2, 0, 2, -1, 0, 1}},
@@ -265,8 +269,8 @@ static void testConvolve() {
         {"laplace 4", 3, 3, {0, 1, 0, 1, -4, 1, 0, 1, 0}},
         {"1x3 mean", 1, 3, {1 / 3.f, 1 / 3.f, 1 / 3.f}},
         {"2x2 mean", 2, 2, {0.25f, 0.25f, 0.25f, 0.25f}},
-        {"5x5 gauss", 5, 5,
-         {1, 4, 6, 4, 1, 4, 16, 24, 16, 4, 6, 24, 36, 24, 6, 4, 16, 24, 16, 4, 1, 4, 6, 4, 1}},
+        {"5x5 gauss", 5, 5, {1,  4, 6, 4,  1,  4,  16, 24, 16, 4, 6, 24, 36,
+                             24, 6, 4, 16, 24, 16, 4,  1,  4,  6, 4, 1}},
     };
 
     mycv::Mat bgr = makeRandomBGR(40, 50, 7u);
@@ -278,7 +282,8 @@ static void testConvolve() {
     for (int r = 0; r < 40; ++r) {
         const uint8_t *s = bgr.ptr(r);
         uint8_t *d = gray.ptr(r);
-        for (int i = 0; i < 50; ++i) d[i] = s[i * 3];
+        for (int i = 0; i < 50; ++i)
+            d[i] = s[i * 3];
     }
     cv::Mat grayRef(40, 50, CV_8UC1, gray.data, gray.step);
 
@@ -351,7 +356,8 @@ static void testBlurSobel() {
     for (int r = 0; r < 40; ++r) {
         const uint8_t *s = bgr.ptr(r);
         uint8_t *d = gray.ptr(r);
-        for (int i = 0; i < 50; ++i) d[i] = s[i * 3 + 1];
+        for (int i = 0; i < 50; ++i)
+            d[i] = s[i * 3 + 1];
     }
     cv::Mat grayRef(40, 50, CV_8UC1, gray.data, gray.step);
 
@@ -414,6 +420,106 @@ static void testBlurSobel() {
     CHECK(thrown == 5);
 }
 
+// 9. erode / dilate：边界跳过越界像素，零容差
+static void testMorph() {
+    mycv::Mat bgr = makeRandomBGR(40, 50, 31u);
+    cv::Mat bgrRef(40, 50, CV_8UC3, bgr.data, bgr.step);
+
+    mycv::Mat gray;
+    gray.create(40, 50, mycv::U8C1);
+    for (int r = 0; r < 40; ++r) {
+        const uint8_t *s = bgr.ptr(r);
+        uint8_t *d = gray.ptr(r);
+        for (int i = 0; i < 50; ++i)
+            d[i] = s[i * 3 + 2];
+    }
+    cv::Mat grayRef(40, 50, CV_8UC1, gray.data, gray.step);
+
+    struct Spec {
+        int shape, w, h;
+    };
+    const Spec specs[] = {
+        {mycv::MORPH_RECT, 3, 3},  {mycv::MORPH_CROSS, 3, 3}, {mycv::MORPH_RECT, 5, 5},
+        {mycv::MORPH_CROSS, 5, 5}, {mycv::MORPH_RECT, 5, 3},  {mycv::MORPH_RECT, 4, 4},
+    };
+
+    for (const auto &sp : specs) {
+        mycv::Mat k = mycv::getStructuringElement(sp.shape, {sp.w, sp.h});
+        cv::Mat ck = cv::getStructuringElement(sp.shape, cv::Size(sp.w, sp.h));
+
+        // 结构元素本身要对
+        CHECK(k.rows == ck.rows && k.cols == ck.cols);
+        int kerDiff = 0;
+        for (int r = 0; r < k.rows; ++r)
+            for (int c = 0; c < k.cols; ++c) {
+                int d =
+                    static_cast<int>(k.at<uint8_t>(r, c)) - static_cast<int>(ck.at<uint8_t>(r, c));
+                if (d != 0) kerDiff = 1;
+            }
+        CHECK(kerDiff == 0);
+
+        // erode / dilate，单通道 + 三通道
+        for (int mode = 0; mode < 2; ++mode) {
+            const bool isErode = (mode == 0);
+
+            mycv::Mat mg = isErode ? mycv::erode(gray, k) : mycv::dilate(gray, k);
+            cv::Mat rg;
+            if (isErode)
+                cv::erode(grayRef, rg, ck);
+            else
+                cv::dilate(grayRef, rg, ck);
+            CHECK(maxDiff(mg, rg) == 0);
+
+            mycv::Mat mc = isErode ? mycv::erode(bgr, k) : mycv::dilate(bgr, k);
+            cv::Mat rc;
+            if (isErode)
+                cv::erode(bgrRef, rc, ck);
+            else
+                cv::dilate(bgrRef, rc, ck);
+            CHECK(maxDiff(mc, rc) == 0);
+        }
+    }
+
+    // 灰度形态学：erode 整体不变亮，dilate 整体不变暗
+    mycv::Mat k3 = mycv::getStructuringElement(mycv::MORPH_RECT, {3, 3});
+    mycv::Mat e = mycv::erode(gray, k3);
+    mycv::Mat d = mycv::dilate(gray, k3);
+    bool eOk = true, dOk = true;
+    for (int r = 0; r < 40; ++r) {
+        const uint8_t *sg = gray.ptr(r);
+        const uint8_t *se = e.ptr(r);
+        const uint8_t *sd = d.ptr(r);
+        for (int c = 0; c < 50; ++c) {
+            if (se[c] > sg[c]) eOk = false;
+            if (sd[c] < sg[c]) dOk = false;
+        }
+    }
+    CHECK(eOk);
+    CHECK(dOk);
+
+    // 不连续输入
+    mycv::Mat sub = bgr.roi({10, 5, 20, 15});
+    CHECK(!sub.isContinuous());
+    mycv::Mat subE = mycv::erode(sub, k3);
+    mycv::Mat subEc = mycv::erode(sub.clone(), k3);
+    CHECK(subE.isContinuous());
+    CHECK(maxDiff(subE, subEc) == 0);
+
+    // 非法：ELLIPSE 未实现、未知 shape
+    int thrown = 0;
+    try {
+        mycv::getStructuringElement(mycv::MORPH_ELLIPSE, {3, 3});
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    try {
+        mycv::getStructuringElement(99, {3, 3});
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    CHECK(thrown == 2);
+}
+
 int main() {
     testFromFile();
     testRandom();
@@ -423,6 +529,7 @@ int main() {
     testThreshold();
     testConvolve();
     testBlurSobel();
+    testMorph();
 
     if (g_failed == 0) {
         std::printf("test_compare_opencv: all passed\n");
