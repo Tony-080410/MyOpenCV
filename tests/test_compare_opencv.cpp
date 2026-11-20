@@ -341,6 +341,79 @@ static void testConvolve() {
     CHECK(thrown == 1);
 }
 
+// 8. blur / sobel：核生成 + convolve2D，零容差
+static void testBlurSobel() {
+    mycv::Mat bgr = makeRandomBGR(40, 50, 23u);
+    cv::Mat bgrRef(40, 50, CV_8UC3, bgr.data, bgr.step);
+
+    mycv::Mat gray;
+    gray.create(40, 50, mycv::U8C1);
+    for (int r = 0; r < 40; ++r) {
+        const uint8_t *s = bgr.ptr(r);
+        uint8_t *d = gray.ptr(r);
+        for (int i = 0; i < 50; ++i) d[i] = s[i * 3 + 1];
+    }
+    cv::Mat grayRef(40, 50, CV_8UC1, gray.data, gray.step);
+
+    // blur：方形 + 非方形
+    const cv::Size blurSizes[] = {{3, 3}, {5, 5}, {7, 7}, {5, 3}, {3, 7}};
+    for (const auto &ks : blurSizes) {
+        mycv::Mat mg = mycv::blur(gray, {ks.width, ks.height});
+        cv::Mat rg;
+        cv::blur(grayRef, rg, ks);
+        CHECK(maxDiff(mg, rg) == 0);
+
+        mycv::Mat mc = mycv::blur(bgr, {ks.width, ks.height});
+        cv::Mat rc;
+        cv::blur(bgrRef, rc, ks);
+        CHECK(maxDiff(mc, rc) == 0);
+    }
+
+    // sobel：dx / dy
+    for (int d = 0; d <= 1; ++d) {
+        const int dx = 1 - d, dy = d;
+
+        mycv::Mat mg = mycv::sobel(gray, dx, dy);
+        cv::Mat rg;
+        cv::Sobel(grayRef, rg, CV_8U, dx, dy, 3);
+        CHECK(maxDiff(mg, rg) == 0);
+
+        mycv::Mat mc = mycv::sobel(bgr, dx, dy);
+        cv::Mat rc;
+        cv::Sobel(bgrRef, rc, CV_8U, dx, dy, 3);
+        CHECK(maxDiff(mc, rc) == 0);
+    }
+
+    // 非法参数：偶数 ksize、零尺寸、dx+dy!=1、ksize!=3
+    int thrown = 0;
+    try {
+        mycv::blur(gray, {4, 4});
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    try {
+        mycv::blur(gray, {0, 3});
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    try {
+        mycv::sobel(gray, 0, 0);
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    try {
+        mycv::sobel(gray, 1, 1);
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    try {
+        mycv::sobel(gray, 1, 0, 5);
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    CHECK(thrown == 5);
+}
+
 int main() {
     testFromFile();
     testRandom();
@@ -349,6 +422,7 @@ int main() {
     testResize();
     testThreshold();
     testConvolve();
+    testBlurSobel();
 
     if (g_failed == 0) {
         std::printf("test_compare_opencv: all passed\n");
