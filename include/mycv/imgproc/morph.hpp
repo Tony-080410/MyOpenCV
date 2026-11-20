@@ -7,7 +7,7 @@ namespace mycv {
 enum MorphShape {
     MORPH_RECT = 0,
     MORPH_CROSS = 1,
-    MORPH_ELLIPSE = 2, // 暂未实现，OpenCV 的椭圆是近似算法
+    MORPH_ELLIPSE = 2, // AI实现
 };
 
 // 生成 0/1 结构元素，CV_8UC1

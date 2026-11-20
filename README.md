@@ -65,7 +65,7 @@ imgproc/geom.hpp     resize                    完成（INTER_LINEAR）
 imgproc/thresh.hpp   threshold                 完成（5 种 type）
 imgproc/filter.hpp   convolve2D                完成（通用核）
 imgproc/filter.hpp   blur / sobel              完成
-imgproc/morph.hpp    erode / dilate            完成（RECT/CROSS 核）
+imgproc/morph.hpp    erode / dilate            完成（三种核）
 imgproc/draw.hpp     line / rect / putText     未实现
 io/video.hpp         VideoCapture              未实现
 ```
@@ -234,9 +234,9 @@ Mat dilate(const Mat &src, const Mat &kernel);
 - `erode` 初值 255，`dilate` 初值 0（8 位里的 ±∞）。
 - 核里是 0 的位置要跳过，否则十字核退化成矩形核
 - `getStructuringElement` 的 `create(ksize.height, ksize.width, U8C1)`：先行后列。
-- `MORPH_ELLIPSE` 目前没实现：OpenCV 的"椭圆"不是数学椭圆，内部是整数近似算法。笔者目前功力不足，每研究明白。
+- `MORPH_ELLIPSE` 不是数学椭圆，是整数近似：每行算半宽 `dx = round(c·√((r²-dy²)/r²))`，填中间 `[c-dx, c+dx]`。`round` 要 half-to-even（`nearbyint`），1.732 → 2；用截断会得到瘦一圈的错误结果。`create` 的内存未初始化，椭圆分支要先 `memset` 清零
 
-测试：RECT/CROSS × 3×3/5×5/5×3/4×4 六种核，erode/dilate 在 U8C1/U8C3 上全部零差异；灰度图验证 erode 不变亮、dilate 不变暗；ROI 输入自洽；ELLIPSE 和未知 shape 抛异常。
+测试：RECT/CROSS × 3×3/5×5/5×3/4×4 六种核 + ELLIPSE × 3×3/5×5/7×7/5×3/4×4/1×1 六种，erode/dilate 在 U8C1/U8C3 上全部零差异；灰度图验证 erode 不变亮、dilate 不变暗；ROI 输入自洽；未知 shape 抛异常。
 
 ## 和 OpenCV 的差异
 

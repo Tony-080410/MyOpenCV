@@ -1,11 +1,16 @@
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <stdexcept>
+
 #include <mycv/core/check.hpp>
 #include <mycv/core/mat.hpp>
 #include <mycv/imgproc/morph.hpp>
 namespace mycv {
 Mat getStructuringElement(int shape, Size ksize) {
     MYCV_ASSERT(ksize.width > 0 && ksize.height > 0);
-    if (shape != MORPH_RECT && shape != MORPH_CROSS)
-        throw std::runtime_error("getStructuringElement: 目前只支持 RECT 和 CROSS");
+    if (shape != MORPH_RECT && shape != MORPH_CROSS && shape != MORPH_ELLIPSE)
+        throw std::runtime_error("getStructuringElement: 未知 shape");
 
     Mat k;
     k.create(ksize.height, ksize.width, U8C1);
@@ -13,11 +18,41 @@ Mat getStructuringElement(int shape, Size ksize) {
     const int cx = ksize.width / 2;
     const int cy = ksize.height / 2;
 
-    for (int r = 0; r < k.rows; ++r) {
-        uint8_t *p = k.ptr(r);
-        for (int c = 0; c < k.cols; ++c) {
-            p[c] = (shape == MORPH_RECT) ? 1 : ((r == cy || c == cx) ? 1 : 0);
+    if (shape == MORPH_RECT) {
+        for (int r = 0; r < k.rows; ++r)
+            std::memset(k.ptr(r), 1, static_cast<std::size_t>(k.cols));
+        return k;
+    }
+
+    if (shape == MORPH_CROSS) {
+        for (int r = 0; r < k.rows; ++r) {
+            uint8_t *p = k.ptr(r);
+            for (int c = 0; c < k.cols; ++c) {
+                p[c] = (r == cy || c == cx) ? 1 : 0;
+            }
         }
+        return k;
+    }
+
+    // MORPH_ELLIPSE：OpenCV 的整数近似，每行填中间一段 [c-dx, c+dx]
+    // create 的内存未初始化，四周靠 memset 清零
+    // AI写的。。。我不会。。。
+    std::memset(k.data, 0, static_cast<std::size_t>(k.rows) * k.step);
+
+    const double invR2 = cy ? 1.0 / (static_cast<double>(cy) * cy) : 0.0;
+    for (int i = 0; i < k.rows; ++i) {
+        const int dy = i - cy;
+        if (std::abs(dy) > cy) continue;
+
+        // half-to-even（cvRound），1.732 -> 2。用截断会得到"瘦"的数学椭圆
+        const int dx =
+            static_cast<int>(std::nearbyint(cx * std::sqrt((cy * cy - dy * dy) * invR2)));
+
+        const int j1 = std::max(cx - dx, 0);
+        const int j2 = std::min(cx + dx + 1, k.cols);
+        uint8_t *p = k.ptr(i);
+        for (int j = j1; j < j2; ++j)
+            p[j] = 1;
     }
     return k;
 }

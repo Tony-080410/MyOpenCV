@@ -439,8 +439,10 @@ static void testMorph() {
         int shape, w, h;
     };
     const Spec specs[] = {
-        {mycv::MORPH_RECT, 3, 3},  {mycv::MORPH_CROSS, 3, 3}, {mycv::MORPH_RECT, 5, 5},
-        {mycv::MORPH_CROSS, 5, 5}, {mycv::MORPH_RECT, 5, 3},  {mycv::MORPH_RECT, 4, 4},
+        {mycv::MORPH_RECT, 3, 3},    {mycv::MORPH_CROSS, 3, 3},  {mycv::MORPH_RECT, 5, 5},
+        {mycv::MORPH_CROSS, 5, 5},   {mycv::MORPH_RECT, 5, 3},   {mycv::MORPH_RECT, 4, 4},
+        {mycv::MORPH_ELLIPSE, 3, 3}, {mycv::MORPH_ELLIPSE, 5, 5}, {mycv::MORPH_ELLIPSE, 7, 7},
+        {mycv::MORPH_ELLIPSE, 5, 3}, {mycv::MORPH_ELLIPSE, 4, 4}, {mycv::MORPH_ELLIPSE, 1, 1},
     };
 
     for (const auto &sp : specs) {
@@ -505,19 +507,14 @@ static void testMorph() {
     CHECK(subE.isContinuous());
     CHECK(maxDiff(subE, subEc) == 0);
 
-    // 非法：ELLIPSE 未实现、未知 shape
+    // 非法：未知 shape
     int thrown = 0;
-    try {
-        mycv::getStructuringElement(mycv::MORPH_ELLIPSE, {3, 3});
-    } catch (const std::exception &) {
-        ++thrown;
-    }
     try {
         mycv::getStructuringElement(99, {3, 3});
     } catch (const std::exception &) {
         ++thrown;
     }
-    CHECK(thrown == 2);
+    CHECK(thrown == 1);
 }
 
 int main() {
