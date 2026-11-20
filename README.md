@@ -64,7 +64,7 @@ imgproc/color.hpp    cvtColor                  完成（BGR2GRAY）
 imgproc/geom.hpp     resize                    完成（INTER_LINEAR）
 imgproc/thresh.hpp   threshold                 完成（5 种 type）
 imgproc/filter.hpp   convolve2D                完成（通用核）
-imgproc/filter.hpp   blur / sobel              未实现
+imgproc/filter.hpp   blur / sobel              完成
 imgproc/morph.hpp    erode / dilate            未实现
 imgproc/draw.hpp     line / rect / putText     未实现
 io/video.hpp         VideoCapture              未实现
@@ -206,6 +206,20 @@ Mat convolve2D(const Mat &src, const Mat &kernel, Point anchor = {-1, -1});
 
 测试：九个核（单位/均值/高斯/sobel xy/laplace/1×3/2×2/5×5）在 U8C1 和 U8C3 上全部零差异，加权核比图大（3×5 图 + 5×5 核）。
 
+## imgproc — filter：blur / sobel
+
+```cpp
+Mat blur(const Mat &src, Size ksize);
+Mat sobel(const Mat &src, int dx, int dy, int ksize = 3);
+```
+
+- `blur` 拒绝偶数 ksize。偶数面积时 `sum/area` 会出现精确的 .5，`cv::blur` 利用 `boxFilter`（整数除）和 `filter2D`（浮点乘 + `cvRound`）舍入方向不同
+- `sobel` 的核和是 0，**不归一化**。`/8` 是 `cv::Sobel` 的可选 `scale` 参数，默认 1.0，加了结果整体缩小 8 倍
+- `sobel` 在随机噪声上约 17% 像素饱和到 0/255，这是 8 位输出的正常现象，不是 bug
+- `dy=1` 的核是 `[[-1,-2,-1],[0,0,0],[1,2,1]]`（下减上）。取反后梯度角整体偏 180°，画面上看不出来，做 `atan2` 才会错
+
+测试：blur 五种 ksize（含非方形 5×3、3×7）+ sobel 两个方向，U8C1/U8C3 全部零差异；偶数 ksize、零尺寸、`dx+dy!=1`、`ksize!=3` 五种非法输入都抛异常。
+
 ## 和 OpenCV 的差异
 
 | 函数 | 差异 | 测试容差 |
@@ -214,6 +228,7 @@ Mat convolve2D(const Mat &src, const Mat &kernel, Point anchor = {-1, -1});
 | resize(INTER_LINEAR) | 最大差 1（OpenCV 走两阶段 `ufixedpoint16` + SIMD） | 1 |
 | threshold | 逐字节一致 | 0 |
 | convolve2D | 逐字节一致（连续输入） | 0 |
+| blur / sobel | 逐字节一致 | 0 |
 | imread / imwrite | 只有 P5/P6、8 位；通道转 BGR | 往返零差异 |
 
 ## 约束
@@ -225,4 +240,4 @@ Mat convolve2D(const Mat &src, const Mat &kernel, Point anchor = {-1, -1});
 
 ## 计划（2026.11.21）
 
-blur / sobel / erode / dilate / draw / VideoCapture
+erode / dilate / draw / VideoCapture
