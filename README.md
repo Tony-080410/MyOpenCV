@@ -63,6 +63,7 @@ io/image.hpp         imread / imwrite          完成（P5/P6）
 imgproc/color.hpp    cvtColor                  完成（BGR2GRAY）
 imgproc/geom.hpp     resize                    完成（INTER_LINEAR）
 imgproc/thresh.hpp   threshold                 完成（5 种 type）
+imgproc/filter.hpp   convolve2D                完成（通用核）
 imgproc/filter.hpp   blur / sobel              未实现
 imgproc/morph.hpp    erode / dilate            未实现
 imgproc/draw.hpp     line / rect / putText     未实现
@@ -189,6 +190,22 @@ Mat threshold(const Mat& src, double thresh, double maxval, int type);
 
 测试：7 个阈值 × 5 种 type + 6 个 maxval + ROI 输入，**全部零差异**。
 
+## imgproc — filter：convolve2D
+
+```cpp
+Mat convolve2D(const Mat &src, const Mat &kernel, Point anchor = {-1, -1});
+```
+
+核用 `Mat(F32C1)` 表达，复用 `create` 的 64 字节对齐。`anchor` 只有 `-1` 表示取核中心。
+
+- 舍入用 `std::lrint`（银行家舍入）。与OpenCV的处理保持一致 
+- `sum` 用 `double`：sobel 有负系数，laplace 中心是 -4，结果可能为负，直接转 `uint8_t` 会回绕成亮白
+- 边界是 `BORDER_REFLECT_101`（下标 -1 映到 1，`n` 映到 `n-2`）
+- 偶数核（2×2）锚点是 `kh/2`，不是 `kh/2-1`。约定错了 2×2 的结果会整体往右下偏一格
+- `anchor` 判断必须写 `== -1`。写成 `< 0` 的话 `anchor={-5,0}` 也被当成默认值，后面的范围断言永远不触发（2026.11.20 记录）
+
+测试：九个核（单位/均值/高斯/sobel xy/laplace/1×3/2×2/5×5）在 U8C1 和 U8C3 上全部零差异，加权核比图大（3×5 图 + 5×5 核）。
+
 ## 和 OpenCV 的差异
 
 | 函数 | 差异 | 测试容差 |
@@ -196,6 +213,7 @@ Mat threshold(const Mat& src, double thresh, double maxval, int type);
 | cvtColor(BGR2GRAY) | 逐字节一致 | 0 |
 | resize(INTER_LINEAR) | 最大差 1（OpenCV 走两阶段 `ufixedpoint16` + SIMD） | 1 |
 | threshold | 逐字节一致 | 0 |
+| convolve2D | 逐字节一致（连续输入） | 0 |
 | imread / imwrite | 只有 P5/P6、8 位；通道转 BGR | 往返零差异 |
 
 ## 约束
