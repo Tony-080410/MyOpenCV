@@ -11,6 +11,7 @@
 #include <mycv/core/mat.hpp>
 #include <mycv/imgproc/color.hpp>
 #include <mycv/imgproc/geom.hpp>
+#include <mycv/imgproc/thresh.hpp>
 #include <mycv/io/image.hpp>
 
 // CMake 里定义了 MYCV_DATA_DIR；单编这个文件时退回相对路径
@@ -173,12 +174,52 @@ static void testResize() {
     CHECK(maxDiff(up, upRef) <= 1);
 }
 
+// 6. threshold：纯逐像素映射，零容差
+static void testThreshold() {
+    mycv::Mat mine = makeRandomBGR(60, 80, 13u);
+    cv::Mat ref(mine.rows, mine.cols, CV_8UC3, mine.data, mine.step);
+
+    const double threshes[] = {0.0, 100.0, 127.0, 127.9, 255.0, -1.0, 300.0};
+    const int types[] = {mycv::THRESH_BINARY, mycv::THRESH_BINARY_INV, mycv::THRESH_TRUNC,
+                         mycv::THRESH_TOZERO, mycv::THRESH_TOZERO_INV};
+
+    for (double t : threshes) {
+        for (int ty : types) {
+            mycv::Mat m = mycv::threshold(mine, t, 255, ty);
+            cv::Mat r;
+            cv::threshold(ref, r, t, 255, ty); // cv 的枚举值和 mycv 相同
+            CHECK(m.rows == ref.rows && m.cols == ref.cols);
+            CHECK(m.isContinuous());
+            CHECK(maxDiff(m, r) == 0);
+        }
+    }
+
+    // maxval 的取整与 clamp
+    for (double mv : {0.0, 128.4, 128.6, 255.0, 300.0, -5.0}) {
+        mycv::Mat m = mycv::threshold(mine, 100, mv, mycv::THRESH_BINARY);
+        cv::Mat r;
+        cv::threshold(ref, r, 100, mv, cv::THRESH_BINARY);
+        CHECK(maxDiff(m, r) == 0);
+    }
+
+    // 不连续输入：ROI 二值化，输出连续
+    mycv::Mat sub = mine.roi({5, 5, 30, 20});
+    CHECK(!sub.isContinuous());
+    mycv::Mat ms = mycv::threshold(sub, 100, 255, mycv::THRESH_BINARY);
+    cv::Mat rs;
+    cv::threshold(ref(cv::Rect(5, 5, 30, 20)), rs, 100, 255, cv::THRESH_BINARY);
+    CHECK(ms.isContinuous());
+    CHECK(ms.rows == 20 && ms.cols == 30);
+    CHECK(maxDiff(ms, rs) == 0);
+}
+
 int main() {
     testFromFile();
     testRandom();
     testRoi();
     testEdge();
     testResize();
+    testThreshold();
 
     if (g_failed == 0) {
         std::printf("test_compare_opencv: all passed\n");
