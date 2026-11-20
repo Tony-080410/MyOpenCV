@@ -11,6 +11,7 @@
 
 #include <mycv/core/mat.hpp>
 #include <mycv/imgproc/color.hpp>
+#include <mycv/imgproc/draw.hpp>
 #include <mycv/imgproc/filter.hpp>
 #include <mycv/imgproc/geom.hpp>
 #include <mycv/imgproc/morph.hpp>
@@ -439,8 +440,8 @@ static void testMorph() {
         int shape, w, h;
     };
     const Spec specs[] = {
-        {mycv::MORPH_RECT, 3, 3},    {mycv::MORPH_CROSS, 3, 3},  {mycv::MORPH_RECT, 5, 5},
-        {mycv::MORPH_CROSS, 5, 5},   {mycv::MORPH_RECT, 5, 3},   {mycv::MORPH_RECT, 4, 4},
+        {mycv::MORPH_RECT, 3, 3},    {mycv::MORPH_CROSS, 3, 3},   {mycv::MORPH_RECT, 5, 5},
+        {mycv::MORPH_CROSS, 5, 5},   {mycv::MORPH_RECT, 5, 3},    {mycv::MORPH_RECT, 4, 4},
         {mycv::MORPH_ELLIPSE, 3, 3}, {mycv::MORPH_ELLIPSE, 5, 5}, {mycv::MORPH_ELLIPSE, 7, 7},
         {mycv::MORPH_ELLIPSE, 5, 3}, {mycv::MORPH_ELLIPSE, 4, 4}, {mycv::MORPH_ELLIPSE, 1, 1},
     };
@@ -517,6 +518,113 @@ static void testMorph() {
     CHECK(thrown == 1);
 }
 
+// 10. draw：line/rectangle 逐像素对比；circle/ellipse 用弱断言
+static mycv::Mat blackMat(int rows, int cols, int type) {
+    mycv::Mat m;
+    m.create(rows, cols, type);
+    const int cn = mycv::channels(type);
+    for (int r = 0; r < rows; ++r) {
+        uint8_t *p = m.ptr(r);
+        for (int i = 0; i < cols * cn; ++i)
+            p[i] = 0;
+    }
+    return m;
+}
+
+static void testDraw() {
+    // line：七条线段，和 cv::line 逐像素一致
+    const int segs[][4] = {{2, 3, 25, 17}, {2, 2, 25, 2},   {5, 0, 5, 18}, {0, 0, 25, 18},
+                           {3, 1, 10, 19}, {0, 15, 25, 14}, {1, 1, 24, 16}};
+    for (const auto &s : segs) {
+        mycv::Mat a = blackMat(20, 30, mycv::U8C1);
+        cv::Mat b(20, 30, CV_8UC1, cv::Scalar(0));
+        mycv::line(a, {s[0], s[1]}, {s[2], s[3]}, {255});
+        cv::line(b, cv::Point(s[0], s[1]), cv::Point(s[2], s[3]), cv::Scalar(255));
+        CHECK(maxDiff(a, b) == 0);
+    }
+
+    // rectangle：描边 + 填充都对
+    {
+        mycv::Mat a = blackMat(20, 30, mycv::U8C1);
+        cv::Mat b(20, 30, CV_8UC1, cv::Scalar(0));
+        mycv::rectangle(a, {3, 4}, {25, 16}, {200});
+        cv::rectangle(b, cv::Point(3, 4), cv::Point(25, 16), cv::Scalar(200));
+        CHECK(maxDiff(a, b) == 0);
+
+        mycv::Mat c = blackMat(20, 30, mycv::U8C1);
+        cv::Mat d(20, 30, CV_8UC1, cv::Scalar(0));
+        mycv::rectangle(c, {3, 4}, {25, 16}, {200}, -1);
+        cv::rectangle(d, cv::Point(3, 4), cv::Point(25, 16), cv::Scalar(200), -1);
+        CHECK(maxDiff(c, d) == 0);
+    }
+
+    // circle：OpenCV 是参数化步进，像素对不上，只验对称和四个顶点
+    {
+        const int N = 41; // 奇数尺寸，中心落在 (20,20)
+        mycv::Mat m = blackMat(N, N, mycv::U8C1);
+        mycv::circle(m, {20, 20}, 10, {255});
+        bool sym = true;
+        for (int y = 0; y < N; ++y)
+            for (int x = 0; x < N; ++x)
+                if (m.at<uint8_t>(y, x) != m.at<uint8_t>(N - 1 - y, x) ||
+                    m.at<uint8_t>(y, x) != m.at<uint8_t>(y, N - 1 - x))
+                    sym = false;
+        CHECK(sym);
+        CHECK(m.at<uint8_t>(20, 30) == 255); // 右
+        CHECK(m.at<uint8_t>(20, 10) == 255); // 左
+        CHECK(m.at<uint8_t>(10, 20) == 255); // 上
+        CHECK(m.at<uint8_t>(30, 20) == 255); // 下
+        CHECK(m.at<uint8_t>(20, 20) == 0); // 圆心不画
+    }
+
+    // ellipse：四个轴顶点 + 对称 + 填充面积
+    {
+        const int H = 41, W = 51;
+        mycv::Mat m = blackMat(H, W, mycv::U8C1);
+        mycv::ellipse(m, {25, 20}, {12, 8}, {255});
+        CHECK(m.at<uint8_t>(20, 25 + 12) == 255);
+        CHECK(m.at<uint8_t>(20, 25 - 12) == 255);
+        CHECK(m.at<uint8_t>(20 - 8, 25) == 255);
+        CHECK(m.at<uint8_t>(20 + 8, 25) == 255);
+
+        bool sym = true;
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x)
+                if (m.at<uint8_t>(y, x) != m.at<uint8_t>(H - 1 - y, x) ||
+                    m.at<uint8_t>(y, x) != m.at<uint8_t>(y, W - 1 - x))
+                    sym = false;
+        CHECK(sym);
+
+        mycv::Mat f = blackMat(H, W, mycv::U8C1);
+        mycv::ellipse(f, {25, 20}, {12, 8}, {255}, -1);
+        int cnt = 0;
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x)
+                if (f.at<uint8_t>(y, x)) ++cnt;
+        // 理论面积 pi*12*8 ≈ 302，允许 10%
+        CHECK(cnt > 270 && cnt < 335);
+    }
+
+    // 颜色 clamp
+    {
+        mycv::Mat m = blackMat(10, 10, mycv::U8C3);
+        mycv::line(m, {0, 0}, {9, 9}, {300, -5, 128});
+        CHECK(m.at<uint8_t>(0, 0) == 255);
+        CHECK(m.at<uint8_t>(0, 1) == 0);
+        CHECK(m.at<uint8_t>(0, 2) == 128);
+    }
+
+    // 越界线段：只画图内那段
+    {
+        mycv::Mat m = blackMat(10, 10, mycv::U8C1);
+        mycv::line(m, {-20, 5}, {20, 5}, {255});
+        int cnt = 0;
+        for (int x = 0; x < 10; ++x)
+            if (m.at<uint8_t>(5, x)) ++cnt;
+        CHECK(cnt == 10);
+    }
+}
+
 int main() {
     testFromFile();
     testRandom();
@@ -527,6 +635,7 @@ int main() {
     testConvolve();
     testBlurSobel();
     testMorph();
+    testDraw();
 
     if (g_failed == 0) {
         std::printf("test_compare_opencv: all passed\n");
