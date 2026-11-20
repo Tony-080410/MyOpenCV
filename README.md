@@ -65,7 +65,7 @@ imgproc/geom.hpp     resize                    完成（INTER_LINEAR）
 imgproc/thresh.hpp   threshold                 完成（5 种 type）
 imgproc/filter.hpp   convolve2D                完成（通用核）
 imgproc/filter.hpp   blur / sobel              完成
-imgproc/morph.hpp    erode / dilate            未实现
+imgproc/morph.hpp    erode / dilate            完成（RECT/CROSS 核）
 imgproc/draw.hpp     line / rect / putText     未实现
 io/video.hpp         VideoCapture              未实现
 ```
@@ -220,6 +220,24 @@ Mat sobel(const Mat &src, int dx, int dy, int ksize = 3);
 
 测试：blur 五种 ksize（含非方形 5×3、3×7）+ sobel 两个方向，U8C1/U8C3 全部零差异；偶数 ksize、零尺寸、`dx+dy!=1`、`ksize!=3` 五种非法输入都抛异常。
 
+## imgproc — morph：erode / dilate
+
+```cpp
+Mat getStructuringElement(int shape, Size ksize);   // MORPH_RECT / MORPH_CROSS
+Mat erode(const Mat &src, const Mat &kernel);
+Mat dilate(const Mat &src, const Mat &kernel);
+```
+
+邻域取最小 / 最大，结果一定是邻域里已经存在的像素值。
+
+- **边界策略**：越界像素直接跳过（`if (sy < 0 || sy >= rows) continue;`），不反射也不填充。等价于 erode 外面填 255、dilate 填 0。沿用 `reflect101` 会让轮廓整体缩一圈
+- `erode` 初值 255，`dilate` 初值 0（8 位里的 ±∞）。
+- 核里是 0 的位置要跳过，否则十字核退化成矩形核
+- `getStructuringElement` 的 `create(ksize.height, ksize.width, U8C1)`：先行后列。
+- `MORPH_ELLIPSE` 目前没实现：OpenCV 的"椭圆"不是数学椭圆，内部是整数近似算法。笔者目前功力不足，每研究明白。
+
+测试：RECT/CROSS × 3×3/5×5/5×3/4×4 六种核，erode/dilate 在 U8C1/U8C3 上全部零差异；灰度图验证 erode 不变亮、dilate 不变暗；ROI 输入自洽；ELLIPSE 和未知 shape 抛异常。
+
 ## 和 OpenCV 的差异
 
 | 函数 | 差异 | 测试容差 |
@@ -229,6 +247,7 @@ Mat sobel(const Mat &src, int dx, int dy, int ksize = 3);
 | threshold | 逐字节一致 | 0 |
 | convolve2D | 逐字节一致（连续输入） | 0 |
 | blur / sobel | 逐字节一致 | 0 |
+| erode / dilate | 逐字节一致 | 0 |
 | imread / imwrite | 只有 P5/P6、8 位；通道转 BGR | 往返零差异 |
 
 ## 约束
@@ -240,4 +259,4 @@ Mat sobel(const Mat &src, int dx, int dy, int ksize = 3);
 
 ## 计划（2026.11.21）
 
-erode / dilate / draw / VideoCapture
+draw / VideoCapture
