@@ -10,22 +10,22 @@ MyOpenCV/
 ├── CMakeLists.txt
 ├── .clang-format               
 ├── include/mycv/
-│   ├── mycv.hpp                门面汇总头            空
+│   ├── mycv.hpp                门面汇总头                空
 │   ├── core/
-│   │   ├── types.hpp           类型常量/几何类型      完成
-│   │   ├── check.hpp           MYCV_ASSERT          完成
-│   │   ├── memory.hpp          对齐分配              完成
-│   │   └── mat.hpp             矩阵类型              完成
+│   │   ├── types.hpp           类型常量/几何类型          完成
+│   │   ├── check.hpp           MYCV_ASSERT              完成
+│   │   ├── memory.hpp          对齐分配                  完成
+│   │   └── mat.hpp             矩阵类型                  完成
 │   ├── imgproc/
-│   │   ├── color.hpp           cvtColor             完成（BGR2GRAY）
-│   │   ├── geom.hpp            resize               完成（INTER_LINEAR）
-│   │   ├── thresh.hpp          threshold            空
-│   │   ├── filter.hpp          blur/sobel           空
-│   │   ├── morph.hpp           erode/dilate         空
-│   │   └── draw.hpp            line/rect/putText    空
+│   │   ├── color.hpp           cvtColor                 完成（BGR2GRAY）
+│   │   ├── geom.hpp            resize                   完成（INTER_LINEAR）
+│   │   ├── thresh.hpp          threshold                完成（5 种 type）
+│   │   ├── filter.hpp          convolve2D/blur/sobel    完成
+│   │   ├── morph.hpp           erode/dilate             完成（三种核）
+│   │   └── draw.hpp            line/rect/circle/ellipse 完成
 │   └── io/
-│       ├── image.hpp           imread/imwrite       完成（P5/P6）
-│       └── video.hpp           VideoCapture         空
+│       ├── image.hpp           imread/imwrite           完成（P5/P6）
+│       └── video.hpp           VideoCapture             空
 ├── src/
 │   ├── core/
 |   |    ├── memory.cpp
@@ -41,11 +41,11 @@ MyOpenCV/
 |       ├── image.cpp
 |       └── video.cpp
 ├── tests/
-│   ├── test_mat.cpp            Mat 自身行为      52 条 CHECK
-│   └── test_compare_opencv.cpp 和真 OpenCV 对比  5 组
+│   ├── test_mat.cpp            Mat 自身行为               64 条 CHECK
+│   └── test_compare_opencv.cpp 和真 OpenCV 对比           10 组
 ├── samples/
 │   ├── hello.cpp               
-│   └── gray.cpp                                     空
+│   └── gray.cpp                                          空
 └── data/                       测试用图
     ├── test_gray.pgm           64×48 P5
     └── test_color.ppm          32×24 P6
@@ -55,19 +55,19 @@ MyOpenCV/
 实现进度（截至2026.11.20）：
 
 ```
-core/types.hpp       类型常量、几何类型           完成
-core/check.hpp       MYCV_ASSERT               完成
-core/memory.hpp      对齐分配器                  完成
-core/mat.hpp         Mat                       完成
-io/image.hpp         imread / imwrite          完成（P5/P6）
-imgproc/color.hpp    cvtColor                  完成（BGR2GRAY）
-imgproc/geom.hpp     resize                    完成（INTER_LINEAR）
-imgproc/thresh.hpp   threshold                 完成（5 种 type）
-imgproc/filter.hpp   convolve2D                完成（通用核）
-imgproc/filter.hpp   blur / sobel              完成
-imgproc/morph.hpp    erode / dilate            完成（三种核）
-imgproc/draw.hpp     line / rect / putText     未实现
-io/video.hpp         VideoCapture              未实现
+core/types.hpp       类型常量、几何类型                 完成
+core/check.hpp       MYCV_ASSERT                     完成
+core/memory.hpp      对齐分配器                        完成
+core/mat.hpp         Mat                             完成
+io/image.hpp         imread / imwrite                完成（P5/P6）
+imgproc/color.hpp    cvtColor                        完成（BGR2GRAY）
+imgproc/geom.hpp     resize                          完成（INTER_LINEAR）
+imgproc/thresh.hpp   threshold                       完成（5 种 type）
+imgproc/filter.hpp   convolve2D                      完成（通用核）
+imgproc/filter.hpp   blur / sobel                    完成
+imgproc/morph.hpp    erode / dilate                  完成（三种核）
+imgproc/draw.hpp     line / rect / circle / ellipse  完成
+io/video.hpp         VideoCapture                    未实现
 ```
 
 依赖单向向下，不反向：
@@ -238,6 +238,29 @@ Mat dilate(const Mat &src, const Mat &kernel);
 
 测试：RECT/CROSS × 3×3/5×5/5×3/4×4 六种核 + ELLIPSE × 3×3/5×5/7×7/5×3/4×4/1×1 六种，erode/dilate 在 U8C1/U8C3 上全部零差异；灰度图验证 erode 不变亮、dilate 不变暗；ROI 输入自洽；未知 shape 抛异常。
 
+## imgproc — draw：line / rectangle / circle / ellipse
+
+```cpp
+void line(Mat &img, Point pt1, Point pt2, const Scalar &color, int thickness = 1);
+void rectangle(Mat &img, Point pt1, Point pt2, const Scalar &color, int thickness = 1);
+void circle(Mat &img, Point center, int radius, const Scalar &color, int thickness = 1);
+void ellipse(Mat &img, Point center, Size axes, const Scalar &color, int thickness = 1);
+```
+
+就地往图上画点，不改变其他像素。`thickness = 1` 描边、`-1` 填充。
+
+- `line` 用 Bresenham，和 `cv::line` **逐像素一致**（实测七条线段：水平/垂直/45°/一般斜率/近似水平）
+- `rectangle` 是四条 `line`，四个角画两次无害；和 `cv::rectangle` 一致，填充也一致
+- `circle` 内部调 `ellipse`，圆就是 `axes = {r, r}` 的特例，一套光栅化算法
+- `ellipse` 用 Zingl 的整数算法。**参数 `A`/`B` 是直径**（`A = |x1-x0| = 2·rx`），传半轴会画出只有一半大的椭圆
+- 填充走的是另一条路：浮点扫描线，`dx = rx·√(1-(dy/ry)²)`
+- 越界点直接丢弃 = 裁剪，部分在图外的线段会自动只画里面那段
+- `Scalar` 是 `double`，写进 `U8` 前必须 clamp（`{300,-5,128}` → `255/0/128`）
+
+**circle / ellipse 和 OpenCV 对不上**：OpenCV 用参数化步进，`cv::circle` 在 r=5 时第 2 行是 `###.###`（中间缺一格）。复刻它要读 `drawing.cpp` 的定点算法，投入产出比太低。测试里用弱断言：轴对称、四个轴顶点落在半径上、填充面积在 `π·rx·ry` 的 10% 内。
+
+测试：七条线段 + 矩形描边/填充逐像素对比；圆和椭圆的对称性、顶点、面积、颜色 clamp、越界裁剪。
+
 ## 和 OpenCV 的差异
 
 | 函数 | 差异 | 测试容差 |
@@ -248,6 +271,8 @@ Mat dilate(const Mat &src, const Mat &kernel);
 | convolve2D | 逐字节一致（连续输入） | 0 |
 | blur / sobel | 逐字节一致 | 0 |
 | erode / dilate | 逐字节一致 | 0 |
+| line / rectangle | 逐字节一致 | 0 |
+| circle / ellipse | 形状正确，光栅化路径不同（OpenCV 用参数化步进，圆有缺格） | 不对拍 |
 | imread / imwrite | 只有 P5/P6、8 位；通道转 BGR | 往返零差异 |
 
 ## 约束
@@ -259,4 +284,4 @@ Mat dilate(const Mat &src, const Mat &kernel);
 
 ## 计划（2026.11.21）
 
-draw / VideoCapture
+VideoCapture
