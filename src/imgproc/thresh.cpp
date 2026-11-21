@@ -30,32 +30,33 @@ Mat threshold(const Mat &src, double thresh, double maxval, int type) {
     uint8_t *p = dst.data;
     const size_t n = static_cast<size_t>((dst.rows) * dst.step);
 
-    for (size_t i = 0; i < n; ++i) {
-        const int v = p[i];
-        switch (type) {
-        case THRESH_BINARY:
-            p[i] = static_cast<uint8_t>(v > t ? mv : 0);
-            break;
-        case THRESH_BINARY_INV:
-            p[i] = static_cast<uint8_t>(v > t ? 0 : mv);
-            break;
-        case THRESH_TRUNC: {
-            int r = (v > t) ? t : v;
-            if (r < 0) r = 0;
-            if (r > 255) r = 255;
-            p[i] = static_cast<uint8_t>(r);
-            break;
+    switch (type) {
+    case THRESH_BINARY:
+        for (size_t i = 0; i < n; ++i)
+            p[i] = static_cast<uint8_t>(p[i] > t ? mv : 0);
+        break;
+    case THRESH_BINARY_INV:
+        for (size_t i = 0; i < n; ++i)
+            p[i] = static_cast<uint8_t>(p[i] > t ? 0 : mv);
+        break;
+    case THRESH_TRUNC:
+        for (size_t i = 0; i < n; ++i) {
+            int v = (p[i] > t) ? t : p[i];
+            if (v < 0) v = 0;
+            if (v > 255) v = 255;
+            p[i] = static_cast<uint8_t>(v);
         }
-        case THRESH_TOZERO:
-            p[i] = static_cast<uint8_t>(v > t ? v : 0);
-            break;
-
-        case THRESH_TOZERO_INV:
-            p[i] = static_cast<uint8_t>(v > t ? 0 : v);
-            break;
-        default:
-            break;
-        }
+        break;
+    case THRESH_TOZERO:
+        for (size_t i = 0; i < n; ++i)
+            p[i] = (p[i] > t) ? p[i] : 0;
+        break;
+    case THRESH_TOZERO_INV:
+        for (size_t i = 0; i < n; ++i)
+            p[i] = (p[i] > t) ? 0 : p[i];
+        break;
+    default:
+        break;
     }
     return dst;
 }
