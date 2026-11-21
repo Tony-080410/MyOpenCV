@@ -33,7 +33,8 @@ void fillSpan(Mat &img, int y, int xa, int xb, const Scalar &c, int cn) {
         setPixel(img, x, y, c, cn);
 }
 
-void drawLine(Mat &img, Point a, Point b, const Scalar &c, int cn) {
+void drawLine(Mat &img, Point a, Point b, int thickness, const Scalar &c, int cn) {
+    const int r = thickness > 1 ? thickness / 2 : 0; // 方形笔刷半径
     int x0 = a.x, y0 = a.y;
     const int x1 = b.x, y1 = b.y;
     const int dx = std::abs(x1 - x0);
@@ -43,7 +44,13 @@ void drawLine(Mat &img, Point a, Point b, const Scalar &c, int cn) {
     int err = dx - dy;
 
     for (;;) {
-        setPixel(img, x0, y0, c, cn);
+        if (r == 0) {
+            setPixel(img, x0, y0, c, cn);
+        } else {
+            // 粗线：以每个线点为中心刷一个 (2r+1)^2 的方块
+            for (int oy = -r; oy <= r; ++oy)
+                for (int ox = -r; ox <= r; ++ox) setPixel(img, x0 + ox, y0 + oy, c, cn);
+        }
         if (x0 == x1 && y0 == y1) break;
         const int e2 = 2 * err;
         if (e2 > -dy) {
@@ -120,10 +127,10 @@ void fillEllipse(Mat &img, int cx, int cy, int rx, int ry, const Scalar &c, int 
 void line(Mat &img, Point pt1, Point pt2, const Scalar &color, int thickness) {
     MYCV_ASSERT(!img.empty());
     MYCV_ASSERT(depthOf(img.type) == DEPTH_8U);
-    if (thickness != 1 && thickness != -1)
-        throw std::runtime_error("line: thickness 只支持 1 和 -1");
+    if (thickness == 0 || thickness < -1)
+        throw std::runtime_error("line: thickness 必须 >= 1 或等于 -1");
 
-    drawLine(img, pt1, pt2, color, channels(img.type));
+    drawLine(img, pt1, pt2, thickness > 0 ? thickness : 1, color, channels(img.type));
 }
 
 void rectangle(Mat &img, Point pt1, Point pt2, const Scalar &color, int thickness) {
@@ -139,12 +146,14 @@ void rectangle(Mat &img, Point pt1, Point pt2, const Scalar &color, int thicknes
             fillSpan(img, y, xmin, xmax, color, cn);
         return;
     }
-    if (thickness != 1) throw std::runtime_error("rectangle: thickness 只支持 1 和 -1");
+    if (thickness == 0 || thickness < -1)
+        throw std::runtime_error("rectangle: thickness 必须 >= 1 或等于 -1");
 
-    drawLine(img, {xmin, ymin}, {xmax, ymin}, color, cn);
-    drawLine(img, {xmin, ymax}, {xmax, ymax}, color, cn);
-    drawLine(img, {xmin, ymin}, {xmin, ymax}, color, cn);
-    drawLine(img, {xmax, ymin}, {xmax, ymax}, color, cn);
+    const int th = thickness > 0 ? thickness : 1;
+    drawLine(img, {xmin, ymin}, {xmax, ymin}, th, color, cn);
+    drawLine(img, {xmin, ymax}, {xmax, ymax}, th, color, cn);
+    drawLine(img, {xmin, ymin}, {xmin, ymax}, th, color, cn);
+    drawLine(img, {xmax, ymin}, {xmax, ymax}, th, color, cn);
 }
 
 void ellipse(Mat &img, Point center, Size axes, const Scalar &color, int thickness) {
