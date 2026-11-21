@@ -27,6 +27,15 @@ add_library(mycv STATIC
 target_include_directories(mycv PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(mycv PRIVATE -Wall -Wextra)
 
+# JPEG：系统有 libjpeg 就开，没有就只支持 PGM/PPM。
+find_package(JPEG QUIET)
+if(JPEG_FOUND)
+  target_link_libraries(mycv PUBLIC JPEG::JPEG)
+  target_compile_definitions(mycv PRIVATE MYCV_HAVE_JPEG=1)
+else()
+  message(STATUS "JPEG: 没找到 libjpeg")
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
   add_subdirectory(tests)
