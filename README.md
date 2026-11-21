@@ -11,27 +11,26 @@ MyOpenCV/
 ├── .clang-format
 ├── .gitignore
 ├── README.md
-├── OPTIMIZATION.md             性能优化实录（blur 滑动窗口 / sobel 内部区）
 ├── LICENSE
 ├── include/mycv/
-│   ├── mycv.hpp                门面汇总头                 空
+│   ├── mycv.hpp                 门面汇总头                       空
 │   ├── core/
-│   │   ├── types.hpp           类型常量/几何类型           完成
-│   │   ├── check.hpp           MYCV_ASSERT              完成
-│   │   ├── memory.hpp          对齐分配                  完成
-│   │   └── mat.hpp             矩阵类型                  完成
+│   │   ├── types.hpp            类型常量/几何类型                 完成
+│   │   ├── check.hpp            MYCV_ASSERT                    完成
+│   │   ├── memory.hpp           对齐分配                        完成
+│   │   └── mat.hpp              矩阵类型                        完成
 │   ├── imgproc/
-│   │   ├── color.hpp           cvtColor                 完成（BGR2GRAY）
-│   │   ├── geom.hpp            resize                   完成（INTER_LINEAR）
-│   │   ├── thresh.hpp          threshold                完成（5 种 type）
-│   │   ├── filter.hpp          convolve2D/平滑/梯度 8 个函数       完成
-│   │   ├── morph.hpp           erode/dilate             完成（三种核）
-│   │   ├── draw.hpp            line/rect/circle/ellipse 完成
-│   │   ├── contours.hpp        findContours/凸包/minAreaRect  完成
-│   │   └── edge.hpp            canny                    完成（L1/L2）
+│   │   ├── color.hpp            cvtColor                       完成（BGR2GRAY）
+│   │   ├── geom.hpp             resize                         完成（INTER_LINEAR）
+│   │   ├── thresh.hpp           threshold                      完成（5 种 type）
+│   │   ├── filter.hpp           卷积/平滑/求导 8 个函数           完成
+│   │   ├── morph.hpp            erode/dilate                   完成（三种核）
+│   │   ├── draw.hpp             line/rect/circle/ellipse       完成
+│   │   ├── contours.hpp         findContours/凸包/minAreaRect   完成
+│   │   └── edge.hpp             canny                          完成（L1/L2）
 │   └── io/
-│       ├── image.hpp           imread/imwrite           完成（P5/P6 + JPEG）
-│       └── video.hpp           VideoCapture             空
+│       ├── image.hpp            imread/imwrite                 完成（P5/P6 + JPG/JPEG）
+│       └── video.hpp            VideoCapture                   空
 ├── src/
 │   ├── core/
 │   │   ├── mat.cpp
@@ -47,45 +46,43 @@ MyOpenCV/
 │   │   └── edge.cpp
 │   └── io/
 │       ├── image.cpp
-│       └── video.cpp                                      空
+│       └── video.cpp                                            空
 ├── tests/
-│   ├── test_mat.cpp            Mat 自身行为                64 条 CHECK
-│   ├── test_compare_opencv.cpp 和真 OpenCV 对比            17 组
-│   └── bench.cpp               性能基准（默认不编，要 -DMYCV_BUILD_BENCH=ON）
+│   ├── test_mat.cpp             Mat 自身行为                     64 条 CHECK
+│   └── test_compare_opencv.cpp  和真 OpenCV 对比                 17 组
+│ 
 ├── samples/
 │   ├── hello.cpp
-│   └── gray.cpp                                           空
-└── data/                       测试用图
-    ├── test_gray.pgm           64×48 P5
-    ├── test_gray.jpg           同一张图的灰度 JPG
-    ├── test_color.ppm          32×24 P6
-    └── test_color.jpg          同一张图的彩色 JPEG
+│   └── gray.cpp                                                 空
+└── data/                        测试用图
+    ├── test_gray.pgm            64×48 P5
+    ├── test_gray.jpg            同一张图的灰度 JPG
+    ├── test_color.ppm           32×24 P6
+    └── test_color.jpg           同一张图的彩色 JPG
 ```
 
 实现进度（截至2026.11.21）：
 
 ```
-core/types.hpp       类型常量、几何类型                 完成
-core/check.hpp       MYCV_ASSERT                     完成
-core/memory.hpp      对齐分配器                        完成
-core/mat.hpp         Mat                             完成
-io/image.hpp         imread / imwrite                完成（P5/P6 + JPEG）
-imgproc/color.hpp    cvtColor                        完成（BGR2GRAY）
-imgproc/geom.hpp     resize                          完成（INTER_LINEAR）
-imgproc/thresh.hpp   threshold                       完成（5 种 type）
-imgproc/filter.hpp   convolve2D                      完成（通用核）
-imgproc/filter.hpp   blur / sobel                    完成
-imgproc/filter.hpp   gaussianBlur                    完成（2^8 定点）
-imgproc/filter.hpp   medianBlur                      完成（滑动直方图）
-imgproc/filter.hpp   scharr / laplacian              完成
-imgproc/filter.hpp   spatialGradient                 完成（16S 输出）
-imgproc/morph.hpp    erode / dilate                  完成（三种核）
-imgproc/draw.hpp     line / rect / circle / ellipse  完成
-imgproc/contours.hpp findContours / boundingRect     完成
-                      / contourArea / convexHull
-                      / minAreaRect
-imgproc/edge.hpp     canny                           完成（L1/L2）
-io/video.hpp         VideoCapture                    未实现
+core/types.hpp        类型常量、几何类型           完成
+core/check.hpp        MYCV_ASSERT               完成
+core/memory.hpp       对齐分配器                  完成
+core/mat.hpp          Mat                       完成
+io/image.hpp          imread/imwrite            完成（P5/P6 + JPG/JPEG）
+imgproc/color.hpp     cvtColor                  完成（BGR2GRAY）
+imgproc/geom.hpp      resize                    完成（INTER_LINEAR）
+imgproc/thresh.hpp    threshold                 完成（5 种 type）
+imgproc/filter.hpp    convolve2D                完成（通用核）
+imgproc/filter.hpp    blur/sobel                完成
+imgproc/filter.hpp    gaussianBlur              完成（2^8 定点）
+imgproc/filter.hpp    medianBlur                完成（滑动直方图）
+imgproc/filter.hpp    scharr/laplacian          完成
+imgproc/filter.hpp    spatialGradient           完成（16S 输出）
+imgproc/morph.hpp     erode/dilate              完成（三种核）
+imgproc/draw.hpp      line/rect/circle/ellipse  完成
+imgproc/contours.hpp  findContours/拟合          完成
+imgproc/edge.hpp      canny                     完成（L1/L2）
+io/video.hpp          VideoCapture              未实现
 ```
 
 依赖单向向下，不反向：
