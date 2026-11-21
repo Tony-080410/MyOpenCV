@@ -10,9 +10,9 @@ MyOpenCV/
 ├── CMakeLists.txt
 ├── .clang-format               
 ├── include/mycv/
-│   ├── mycv.hpp                门面汇总头                空
+│   ├── mycv.hpp                门面汇总头                 空
 │   ├── core/
-│   │   ├── types.hpp           类型常量/几何类型          完成
+│   │   ├── types.hpp           类型常量/几何类型           完成
 │   │   ├── check.hpp           MYCV_ASSERT              完成
 │   │   ├── memory.hpp          对齐分配                  完成
 │   │   └── mat.hpp             矩阵类型                  完成
@@ -125,22 +125,27 @@ struct Mat {
 **check.hpp**：`MYCV_ASSERT(cond)` 展开成 `if (!cond) throw std::runtime_error(...)`，消息含表达式原文和文件行号。不用 `assert`，因为 CMake 默认 Release，`NDEBUG` 会把 `assert` 整个编掉。\
 **memory.hpp**：`makeBuffer(bytes)` 返回 `shared_ptr<uint8_t>`，用 `operator new(bytes, std::align_val_t{64})` 分配，deleter 必须用同样形式的带对齐的 `operator delete`。不用 `aligned_alloc`，因为它要求 size 是 alignment 的整数倍，而 `create(3,4,U8C1)` 是 12 字节。
 
-## io — PGM/PPM 读写
+## io — PGM/PPM + JPEG 读写
 
-支持 Netpbm 的二进制版本：`P5` 灰度 → `U8C1`，`P6` 彩色 → `U8C3`。
+`imread` 按**魔数**分派：`P5`/`P6` 走自己的 Netpbm 解析，`FF D8` 走 libjpeg。
+`imwrite` 按**扩展名**分派：`.jpg`/`.jpeg` 走 JPEG，其余写 PGM/PPM。
 
 ```cpp
-Mat imread(const std::string& path);          // 失败抛 runtime_error
-void imwrite(const std::string& path, const Mat& m);
+Mat imread(const std::string& path);                        // 失败抛 runtime_error
+void imwrite(const std::string& path, const Mat& m, int jpegQuality = 95);
 ```
+
+- **P6 读进来转成 BGR，写出去转回 RGB**。OpenCV 的颜色约定是 BGR，只有转一下才能和 `cv::cvtColor` 对应上，JPEG 同理
+- 格式判断看内容不看扩展名：把 JPEG 改名成 `.pgm` 也能正确读出
+- JPEG 编解码链 libjpeg（`find_package(JPEG)`，没装就只支持 PGM/PPM，配置时会打印提示）
 
 - **P6 读进来转成 BGR，写出去转回 RGB**。OpenCV 的颜色约定是 BGR，只有转一下才能和 `cv::cvtColor` 对应上
 - 头部解析必须顺序进行，没有固定偏移：字段之间任意空白分隔，`#` 到行尾是注释
 - `MAXVAL` 后面**一个空白字符**，`eatSeparator` 只吃一个；CRLF 时 `\r` 后补一个 `\n`
 - 读数字时多看的那个字符必须 `putback` 回去，否则 `MAXVAL` 后的分隔符被吃掉，整张图偏移一个字节
-- 只支持 `MAXVAL=255`，16 位 PGM 直接抛异常
+- 只支持 `MAXVAL=255`，16 位 PGM 抛异常
 
-测试：往返（写出去再读回来逐像素比）、PIL 交叉验证（`imwrite` 的文件 PIL 能读且像素一致）、cv2 交叉验证、CRLF 头部、ROI 写入（不连续路径）。
+测试：往返（写出去再读回来逐像素比）、PIL 交叉验证（`imwrite` 的文件 PIL 能读且像素一致）、cv2 交叉验证、CRLF 头部、ROI 写入（不连续路径）；JPEG 解码和 `cv::imread` **逐字节一致**，编码和 `cv::imwrite` **字节级相同**（同一 quality 下 MD5 一致）。
 
 ## imgproc — cvtColor
 
@@ -273,15 +278,17 @@ void ellipse(Mat &img, Point center, Size axes, const Scalar &color, int thickne
 | erode / dilate | 逐字节一致 | 0 |
 | line / rectangle | 逐字节一致 | 0 |
 | circle / ellipse | 形状正确，光栅化路径不同（OpenCV 用参数化步进，圆有缺格） | 不对拍 |
-| imread / imwrite | 只有 P5/P6、8 位；通道转 BGR | 往返零差异 |
+| imread / imwrite | PGM/PPM 只支持 P5/P6、8 位；通道转 BGR | 往返零差异 |
+| JPEG 解码 | 同一个 libjpeg，逐字节一致 | 0 |
+| JPEG 编码 | 同一 quality 下和 cv::imwrite 字节级相同 | MD5 相同 |
 
 ## 约束
 
 - 像素类型只有 `U8C1` / `U8C3` / `F32C1`
-- 图像 IO 只做 PGM/PPM，暂时不做 PNG/JPEG
+- 图像 IO：PGM/PPM（自己解析）+ JPEG（libjpeg），不做 PNG
 - 检查失败抛 `std::runtime_error`，不用 `assert`
 - 4K 以上图像未测 ！（没找素材呢）
 
-## 计划（2026.11.21）
+## 计划（2027）
 
 VideoCapture
