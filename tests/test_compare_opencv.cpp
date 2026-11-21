@@ -625,6 +625,64 @@ static void testDraw() {
     }
 }
 
+// 11. JPEG：解码和 cv::imread 逐字节一致，编码和 cv::imwrite 字节级相同
+static void testJpeg() {
+    // 彩色解码
+    {
+        mycv::Mat mine = mycv::imread(dataPath("test_color.jpg"));
+        cv::Mat ref = cv::imread(dataPath("test_color.jpg"), cv::IMREAD_COLOR);
+        CHECK(!mine.empty());
+        CHECK(!ref.empty());
+        CHECK(mine.rows == ref.rows && mine.cols == ref.cols);
+        CHECK(mine.type == mycv::U8C3);
+        CHECK(maxDiff(mine, ref) == 0);
+    }
+
+    // 灰度解码
+    {
+        mycv::Mat mine = mycv::imread(dataPath("test_gray.jpg"));
+        cv::Mat ref = cv::imread(dataPath("test_gray.jpg"), cv::IMREAD_GRAYSCALE);
+        CHECK(mine.type == mycv::U8C1);
+        CHECK(maxDiff(mine, ref) == 0);
+    }
+
+    // 编码：写出去 cv 能读回，且内容接近原图
+    {
+        mycv::Mat src = mycv::imread(dataPath("test_color.jpg"));
+        mycv::imwrite("/tmp/mycv_enc_test.jpg", src, 95);
+        cv::Mat back = cv::imread("/tmp/mycv_enc_test.jpg", cv::IMREAD_COLOR);
+        CHECK(!back.empty());
+        CHECK(back.rows == src.rows && back.cols == src.cols);
+        CHECK(maxDiff(src, back) < 40); // 有损，允许误差
+    }
+
+    // PGM 读进来到 JPEG 写出去，格式互通
+    {
+        mycv::Mat g = mycv::imread(dataPath("test_gray.pgm"));
+        mycv::imwrite("/tmp/mycv_pgm2jpg.jpg", g, 95);
+        cv::Mat back = cv::imread("/tmp/mycv_pgm2jpg.jpg", cv::IMREAD_GRAYSCALE);
+        CHECK(!back.empty());
+        CHECK(back.rows == g.rows && back.cols == g.cols);
+    }
+
+    // 魔数识别：扩展名写错也要按内容分派
+    {
+        std::FILE* in = std::fopen(dataPath("test_color.jpg").c_str(), "rb");
+        CHECK(in != nullptr);
+        std::vector<unsigned char> buf(4096);
+        const std::size_t n = std::fread(buf.data(), 1, buf.size(), in);
+        std::fclose(in);
+
+        std::FILE* out = std::fopen("/tmp/wrong_ext.pgm", "wb");
+        std::fwrite(buf.data(), 1, n, out);
+        std::fclose(out);
+
+        mycv::Mat m = mycv::imread("/tmp/wrong_ext.pgm"); // 名字是 .pgm，内容是 JPEG
+        CHECK(m.type == mycv::U8C3);
+        CHECK(m.rows == 24 && m.cols == 32);
+    }
+}
+
 int main() {
     testFromFile();
     testRandom();
@@ -636,6 +694,7 @@ int main() {
     testBlurSobel();
     testMorph();
     testDraw();
+    testJpeg();
 
     if (g_failed == 0) {
         std::printf("test_compare_opencv: all passed\n");
