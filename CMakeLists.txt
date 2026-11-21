@@ -20,6 +20,8 @@ add_library(mycv STATIC
   src/imgproc/thresh.cpp
   src/imgproc/filter.cpp
   src/imgproc/morph.cpp
+  src/imgproc/edge.cpp
+  src/imgproc/contours.cpp
   src/imgproc/draw.cpp
   src/io/image.cpp
   src/io/video.cpp
@@ -40,4 +42,3 @@ include(CTest)
 if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()
-add_subdirectory(samples)

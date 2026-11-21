@@ -13,3 +13,10 @@ target_compile_definitions(test_compare_opencv PRIVATE MYCV_DATA_DIR="${PROJECT_
 add_test(NAME test_compare_opencv COMMAND test_compare_opencv)
 
 set_tests_properties(test_mat test_compare_opencv PROPERTIES WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
+
+option(MYCV_BUILD_BENCH "构建性能基准程序" OFF)
+if(MYCV_BUILD_BENCH)
+  add_executable(bench bench.cpp)
+  target_link_libraries(bench PRIVATE mycv ${OpenCV_LIBS})
+endif()

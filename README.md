@@ -3,12 +3,16 @@
 笔者想深入探寻CV底层原理，于是心血来潮，基于OpenCV 4.10,
 从零实现一套精简版 OpenCV。
 
-## 项目结构（初步搭建）
+## 项目结构
 
 ```
 MyOpenCV/
 ├── CMakeLists.txt
-├── .clang-format               
+├── .clang-format
+├── .gitignore
+├── README.md
+├── OPTIMIZATION.md             性能优化实录（blur 滑动窗口 / sobel 内部区）
+├── LICENSE
 ├── include/mycv/
 │   ├── mycv.hpp                门面汇总头                 空
 │   ├── core/
@@ -20,53 +24,67 @@ MyOpenCV/
 │   │   ├── color.hpp           cvtColor                 完成（BGR2GRAY）
 │   │   ├── geom.hpp            resize                   完成（INTER_LINEAR）
 │   │   ├── thresh.hpp          threshold                完成（5 种 type）
-│   │   ├── filter.hpp          convolve2D/blur/sobel    完成
+│   │   ├── filter.hpp          convolve2D/平滑/梯度 8 个函数       完成
 │   │   ├── morph.hpp           erode/dilate             完成（三种核）
-│   │   └── draw.hpp            line/rect/circle/ellipse 完成
+│   │   ├── draw.hpp            line/rect/circle/ellipse 完成
+│   │   ├── contours.hpp        findContours/凸包/minAreaRect  完成
+│   │   └── edge.hpp            canny                    完成（L1/L2）
 │   └── io/
-│       ├── image.hpp           imread/imwrite           完成（P5/P6）
+│       ├── image.hpp           imread/imwrite           完成（P5/P6 + JPEG）
 │       └── video.hpp           VideoCapture             空
 ├── src/
 │   ├── core/
-|   |    ├── memory.cpp
-|   |    └── mat.cpp
+│   │   ├── mat.cpp
+│   │   └── memory.cpp
 │   ├── imgproc/
-|   |    ├── color.cpp
-|   |    ├── geom.cpp
-|   |    ├── thresh.cpp
-|   |    ├── filter.cpp
-|   |    ├── morph.cpp
-|   |    └── draw.cpp
+│   │   ├── color.cpp
+│   │   ├── geom.cpp
+│   │   ├── thresh.cpp
+│   │   ├── filter.cpp
+│   │   ├── morph.cpp
+│   │   ├── draw.cpp
+│   │   ├── contours.cpp
+│   │   └── edge.cpp
 │   └── io/
-|       ├── image.cpp
-|       └── video.cpp
+│       ├── image.cpp
+│       └── video.cpp                                      空
 ├── tests/
-│   ├── test_mat.cpp            Mat 自身行为               64 条 CHECK
-│   └── test_compare_opencv.cpp 和真 OpenCV 对比           10 组
+│   ├── test_mat.cpp            Mat 自身行为                64 条 CHECK
+│   ├── test_compare_opencv.cpp 和真 OpenCV 对比            17 组
+│   └── bench.cpp               性能基准（默认不编，要 -DMYCV_BUILD_BENCH=ON）
 ├── samples/
-│   ├── hello.cpp               
-│   └── gray.cpp                                          空
+│   ├── hello.cpp
+│   └── gray.cpp                                           空
 └── data/                       测试用图
     ├── test_gray.pgm           64×48 P5
-    └── test_color.ppm          32×24 P6
-
+    ├── test_gray.jpg           同一张图的灰度 JPG
+    ├── test_color.ppm          32×24 P6
+    └── test_color.jpg          同一张图的彩色 JPEG
 ```
 
-实现进度（截至2026.11.20）：
+实现进度（截至2026.11.21）：
 
 ```
 core/types.hpp       类型常量、几何类型                 完成
 core/check.hpp       MYCV_ASSERT                     完成
 core/memory.hpp      对齐分配器                        完成
 core/mat.hpp         Mat                             完成
-io/image.hpp         imread / imwrite                完成（P5/P6）
+io/image.hpp         imread / imwrite                完成（P5/P6 + JPEG）
 imgproc/color.hpp    cvtColor                        完成（BGR2GRAY）
 imgproc/geom.hpp     resize                          完成（INTER_LINEAR）
 imgproc/thresh.hpp   threshold                       完成（5 种 type）
 imgproc/filter.hpp   convolve2D                      完成（通用核）
 imgproc/filter.hpp   blur / sobel                    完成
+imgproc/filter.hpp   gaussianBlur                    完成（2^8 定点）
+imgproc/filter.hpp   medianBlur                      完成（滑动直方图）
+imgproc/filter.hpp   scharr / laplacian              完成
+imgproc/filter.hpp   spatialGradient                 完成（16S 输出）
 imgproc/morph.hpp    erode / dilate                  完成（三种核）
 imgproc/draw.hpp     line / rect / circle / ellipse  完成
+imgproc/contours.hpp findContours / boundingRect     完成
+                      / contourArea / convexHull
+                      / minAreaRect
+imgproc/edge.hpp     canny                           完成（L1/L2）
 io/video.hpp         VideoCapture                    未实现
 ```
 
@@ -96,7 +114,17 @@ cd build && ctest --output-on-failure
 ```
 
 - `test_mat` 只依赖本库，测 Mat 自身行为
-- `test_compare_opencv` 需要系统装的 OpenCV，同一份输入各跑一遍逐像素比
+- `test_compare_opencv` 需要系统装的 OpenCV，同一份输入两边各跑一遍逐像素比
+
+性能基准单独编，不进 ctest：
+
+```bash
+cmake -DMYCV_BUILD_BENCH=ON -B build
+cmake --build build --target bench
+taskset -c 0 ./build/tests/bench
+```
+
+`taskset` 不是可选项：混合架构 CPU 上进程会在 P 核和 E 核之间迁移，结果差近 2 倍。优化记录见 [OPTIMIZATION.md](OPTIMIZATION.md)。
 
 ## core — Mat
 
@@ -121,7 +149,7 @@ struct Mat {
 
 ## core — types / check / memory
 
-**types.hpp**：像素类型编码 `type = depth + ((cn-1) << 3)`，低 3 位是深度，高位是通道数。 \
+**types.hpp**：像素类型编码 `type = depth + ((cn-1) << 3)`，低 3 位是深度，高位是通道数；常量 `U8C1` / `U8C3` / `S16C1` / `F32C1`。 \
 **check.hpp**：`MYCV_ASSERT(cond)` 展开成 `if (!cond) throw std::runtime_error(...)`，消息含表达式原文和文件行号。不用 `assert`，因为 CMake 默认 Release，`NDEBUG` 会把 `assert` 整个编掉。\
 **memory.hpp**：`makeBuffer(bytes)` 返回 `shared_ptr<uint8_t>`，用 `operator new(bytes, std::align_val_t{64})` 分配，deleter 必须用同样形式的带对齐的 `operator delete`。不用 `aligned_alloc`，因为它要求 size 是 alignment 的整数倍，而 `create(3,4,U8C1)` 是 12 字节。
 
@@ -225,6 +253,55 @@ Mat sobel(const Mat &src, int dx, int dy, int ksize = 3);
 
 测试：blur 五种 ksize（含非方形 5×3、3×7）+ sobel 两个方向，U8C1/U8C3 全部零差异；偶数 ksize、零尺寸、`dx+dy!=1`、`ksize!=3` 五种非法输入都抛异常。
 
+### gaussianBlur
+
+```cpp
+Mat gaussianBlur(const Mat &src, Size ksize, double sigmaX = 0, double sigmaY = 0);
+```
+
+可分离两趟 + 2^8 定点，和 `cv::GaussianBlur` **逐字节一致**。
+
+- 核压成整数（和恒为 256）：水平趟整数累加不舍入（最大 `255*256`），垂直趟后 `(acc + 2^15) >> 16`。`CV_DESCALE` 是 round half up，不是银行家舍入，写成截断会全图偏暗 1
+- **定点化不是 `round(k*256)`**，是误差扩散：左半边逐项 `cvRound(k[i]*256 + err)`、误差带到下一项，中心项用 `256 - 2*sum` 补齐。直接 round 在 5×5/7×7/11×11 上差 1~2
+- `sigma <= 0` 且 ksize 是 3/5/7/9 时核是**写死的整数比**：3 → 1,2,1 /4；5 → 1,4,6,4,1 /16；7 → 2,7,14,18,14,7,2 /64；9 → 4,13,30,51,60,51,30,13,4 /256。其他尺寸才走 `sigma = 0.15n + 0.35` 的指数公式
+- `sigmaY <= 0` 取 `sigmaX`；单行/单列图把那一维的核缩成 1，否则 `reflect101` 在 n=1 上原地打转
+- 反射索引按像素算再乘 `cn`，直接按字节反射会让三通道错位
+
+测试：灰度 + 彩色随机图 × ksize{3,5,7,9,11,15} × sigma{0,0.8,1.2,1.5,2.5}、非方形核 5×3 / 7×5、单行/单列、偶数 ksize 与超大 ksize 抛异常，**全部零差异**。速度：640×480 单线程 0.77~9.86 ms，比 OpenCV 慢 9~17 倍（它走 SIMD；方框核的滑动窗口在这里用不上，高斯核不均匀）。
+
+### medianBlur
+
+```cpp
+Mat medianBlur(const Mat &src, int ksize);
+```
+
+排序取中间值，不是加权求和，所以不走 `convolve2D`。去椒盐噪声是它的主场：3×3 窗口里 8 个 10 加一个 200，`blur` 出 31、`gaussianBlur` 出 58，中值直接是 10 —— 离群值被丢掉，没参与平均。
+
+- **边界是 `BORDER_REPLICATE`**（越界坐标夹到边缘），和 `blur` / `gaussianBlur` 的 `REFLECT_101` **相反**
+- `ksize` 必须是不小于 1 的奇数；`ksize == 1` 不抛异常，直接等于拷贝
+- **中值唯一**（奇数个元素），没有并列歧义，所以能做到逐字节零差异
+- 实现是**滑动直方图**：256 桶 + 中值指针，每像素只做 2k 次桶增减，耗时基本不随 k 变（k=3/5/9 都在 6 ms 上下）。排序版（每像素 `nth_element`）k=3 要 21 ms、k=9 要 199 ms
+- 中值指针的维护：`below` = 严格小于 `med` 的个数，中值满足 `below <= m < below + hist[med]`，滑一格后上下各修正一次，通常 0~2 步
+
+测试：灰度 / 彩色 / 椒盐 × ksize{1,3,5,7,9,15}、单行 / 单列 / 1×1 / 2×2 四种退化尺寸、ksize 0 与偶数抛异常，**全部零差异**。速度：640×480 单线程 k=3 6.4 ms / k=5 5.8 ms / k=9 6.2 ms（k=9 和 `cv::medianBlur` 持平，k=3 慢 35 倍，它走 SIMD 排序网络）。
+
+### Scharr / Laplacian / spatialGradient
+
+```cpp
+Mat scharr(const Mat &src, int dx, int dy);             // 3x3
+Mat laplacian(const Mat &src, int ksize = 1);           // ksize 只支持 1 或 3
+void spatialGradient(const Mat &src, Mat &dx, Mat &dy); // 输出 S16C1
+```
+
+三个小核导数。前两个走 `convolve2D`，`spatialGradient` 单独展开。
+
+- **Scharr 核** `[-3,0,3;-10,0,10;-3,0,3]`（一维 `[3,10,3]` 和 `[-1,0,1]` 的外积），方向精度比 Sobel 高。核和仍是 0、不归一化，8U 输出照样饱和
+- **Laplacian 的两个核**：`ksize=1` 是四邻域 `[0,1,0;1,-4,1;0,1,0]`，`ksize=3` 是八邻域 `[2,0,2;0,-8,0;2,0,2]`（= `[1,2,1]^T ⊗ [1,-2,1]`）。二阶核不能拆成两趟一维
+- **`spatialGradient` 输出 `S16C1`**：16 位装得下 ±1020，**不饱和**，这就是它和 `sobel()` 的区别。输出前先 `create(H, W, S16C1)`，不能复用一个 U8 的 dst
+- `spatialGradient` 只支持 U8C1（OpenCV 同样如此），多通道抛异常
+
+测试：灰度 + 彩色 × scharr dx/dy、laplacian ksize 1/3 全部零差异；spatialGradient 和 `cv::spatialGradient` 逐元素零差异，另加一条「峰值必须 > 255」的饱和检查；`scharr(1,1)`、`laplacian(5)`、三通道 spatialGradient 都抛异常。速度：640×480 单线程 scharr 2.02 ms、laplacian 2.02 ms、spatialGradient 0.42 ms（核展开省掉了核循环，比走 `convolve2D` 快 5 倍）。
+
 ## imgproc — morph：erode / dilate
 
 ```cpp
@@ -254,8 +331,8 @@ void ellipse(Mat &img, Point center, Size axes, const Scalar &color, int thickne
 
 就地往图上画点，不改变其他像素。`thickness = 1` 描边、`-1` 填充。
 
-- `line` 用 Bresenham，和 `cv::line` **逐像素一致**（实测七条线段：水平/垂直/45°/一般斜率/近似水平）
-- `rectangle` 是四条 `line`，四个角画两次无害；和 `cv::rectangle` 一致，填充也一致
+- `line` 用 Bresenham
+- `rectangle` ：四条 `line`，四个角画两次无害
 - `circle` 内部调 `ellipse`，圆就是 `axes = {r, r}` 的特例，一套光栅化算法
 - `ellipse` 用 Zingl 的整数算法。**参数 `A`/`B` 是直径**（`A = |x1-x0| = 2·rx`），传半轴会画出只有一半大的椭圆
 - 填充走的是另一条路：浮点扫描线，`dx = rx·√(1-(dy/ry)²)`
@@ -266,6 +343,49 @@ void ellipse(Mat &img, Point center, Size axes, const Scalar &color, int thickne
 
 测试：七条线段 + 矩形描边/填充逐像素对比；圆和椭圆的对称性、顶点、面积、颜色 clamp、越界裁剪。
 
+## imgproc — contours：findContours
+
+```cpp
+std::vector<std::vector<Point>> findContours(const Mat &binary);   // 只取外轮廓
+Rect boundingRect(const std::vector<Point> &contour);              // 轴对齐外接矩形
+double contourArea(const std::vector<Point> &contour);             // 鞋带公式
+std::vector<Point> convexHull(std::vector<Point> pts);             // 单调链
+RotatedRect minAreaRect(const std::vector<Point> &contour);        // 最小旋转外接矩形
+```
+
+- 使用 **Moore 邻域跟踪**：从每个连通域最左上的白像素起步，沿 8 邻域绕一圈
+- **起点手动加进轮廓**。`contour` 从第二个点开始推的话，圆的顶点会漏掉一行，外接矩形少 1 像素
+- 扫描从"来路"的顺时针下一位开始，不能从来路本身开始，否则原地打转（2026.11.21）
+- `boundingRect` 的宽高是 `max - min + 1`，`+1` 是端点本身
+- `contourArea` 用鞋带公式，`long long` 累加；结果可能为负，取绝对值再乘 0.5
+
+测试：实心矩形、两个分离物体、L 形、带孔方环、单像素、三个物体+噪声，共六组。轮廓数量、每个外接矩形、面积**全部和 OpenCV 一致**（面积差 0 像素）。
+
+### convexHull / minAreaRect
+
+- `convexHull`  **Andrew 单调链** 算法：按 (x,y) 排序，从左到右扫出下凸包、从右到左扫出上凸包，遇到右转就弹栈。`cross <= 0` 去掉共线点，只用整数叉积、没有浮点误差
+- `minAreaRect` 枚举**凸包的每一条边**：最小外接矩形必然有一条边和凸包的某条边共线。每条边方向投影求包围盒，取面积最小的。
+- `RotatedRect` 的约定是**自己的**：`width >= height`，`angle` 是长边与 x 轴夹角、落在 `[0,180)`。OpenCV 的 `cv::RotatedRect` 是 `angle ∈ (0,90]` 且宽高方向相反，对比前要先归一化
+- **minAreaRect 可能有多解**：三角形沿任一条边扣出的矩形面积相同，正方形和近似圆也一样。所以测试按定义验证（面积一致 + 所有点在框内），不比中心点和角度
+
+测试：轴对齐矩形、旋转 30°、三角形、正方形、16 边形近似圆、随机 200 点。面积和 OpenCV **差 0.00**，所有点都在框内
+
+## imgproc — edge：canny
+
+```cpp
+Mat canny(const Mat &src, double low, double high, bool L2gradient = false);
+```
+
+Sobel → 幅值 → 非极大值抑制 → 双阈值滞后，四步。src 必须是 `U8C1`。
+- **边界是 `BORDER_REPLICATE`**，和 `convolve2D` 默认的 `REFLECT_101` 相反。噪声图上两种边界有 994/60000 个像素幅值不同
+- 方向分档用定点：`gya = |gy| << 15`、`TG22 = 13573`（tan22.5°·2¹⁵）。`gya < |gx|·TG22` 走水平、`gya > |gx|·(TG22+65536)` 走垂直、其余走对角
+- **破平方式不对称**：水平/垂直是 `m > 前一个 && m >= 后一个`，对角是两个严格 `>`。全写成 `>` 边会被劈成两半（200×300 噪声图上错 1913 像素）
+- `L2gradient = true` 时幅值用 `gx²+gy²`，阈值先 `min(32767, t)` 再平方
+- 多通道抛异常（OpenCV 取各通道最大梯度），`apertureSize` 只支持 3
+
+测试：pgm 文件图 + 200×300 随机噪声 + 台阶/弱台阶图，5 组阈值 × 3 张图 + L2 + 浮点阈值，**全部零差异**；多通道和空图抛异常。速度：640×480 单线程 3.63 ms，`cv::Canny` 3.94 ms。
+
+
 ## 和 OpenCV 的差异
 
 | 函数 | 差异 | 测试容差 |
@@ -275,11 +395,19 @@ void ellipse(Mat &img, Point center, Size axes, const Scalar &color, int thickne
 | threshold | 逐字节一致 | 0 |
 | convolve2D | 逐字节一致（连续输入） | 0 |
 | blur / sobel | 逐字节一致 | 0 |
+| gaussianBlur | 逐字节一致（ksize 3~15、sigma 0~5、含 1×N） | 0 |
+| medianBlur | 逐字节一致（ksize 1~15、含 1×N/1×1/2×2） | 0 |
+| scharr / laplacian | 逐字节一致 | 0 |
+| spatialGradient | 逐元素一致，输出 16S 不饱和 | 0 |
+| canny | 逐字节一致（L1/L2、浮点阈值、小图） | 0 |
 | erode / dilate | 逐字节一致 | 0 |
 | line / rectangle | 逐字节一致 | 0 |
-| circle / ellipse | 形状正确，光栅化路径不同（OpenCV 用参数化步进，圆有缺格） | 不对拍 |
+| findContours | 轮廓数量、外接矩形、面积都和 OpenCV 一致（点顺序不同） | 0 |
+| convexHull | 凸包点数一致 | 0 |
+| minAreaRect | 面积一致（多解时角度可能不同，属正常） | 0 |
+| circle / ellipse | 形状正确，光栅化路径不同（OpenCV 用参数化步进，圆有缺格） | 不对照 |
 | imread / imwrite | PGM/PPM 只支持 P5/P6、8 位；通道转 BGR | 往返零差异 |
-| JPEG 解码 | 同一个 libjpeg，逐字节一致 | 0 |
+| JPG 解码 | 同一个 libjpeg，逐字节一致 | 0 |
 | JPEG 编码 | 同一 quality 下和 cv::imwrite 字节级相同 | MD5 相同 |
 
 ## 约束
