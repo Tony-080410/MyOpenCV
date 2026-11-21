@@ -11,7 +11,9 @@
 
 #include <mycv/core/mat.hpp>
 #include <mycv/imgproc/color.hpp>
+#include <mycv/imgproc/contours.hpp>
 #include <mycv/imgproc/draw.hpp>
+#include <mycv/imgproc/edge.hpp>
 #include <mycv/imgproc/filter.hpp>
 #include <mycv/imgproc/geom.hpp>
 #include <mycv/imgproc/morph.hpp>
@@ -667,13 +669,13 @@ static void testJpeg() {
 
     // 魔数识别：扩展名写错也要按内容分派
     {
-        std::FILE* in = std::fopen(dataPath("test_color.jpg").c_str(), "rb");
+        std::FILE *in = std::fopen(dataPath("test_color.jpg").c_str(), "rb");
         CHECK(in != nullptr);
         std::vector<unsigned char> buf(4096);
         const std::size_t n = std::fread(buf.data(), 1, buf.size(), in);
         std::fclose(in);
 
-        std::FILE* out = std::fopen("/tmp/wrong_ext.pgm", "wb");
+        std::FILE *out = std::fopen("/tmp/wrong_ext.pgm", "wb");
         std::fwrite(buf.data(), 1, n, out);
         std::fclose(out);
 
@@ -681,6 +683,536 @@ static void testJpeg() {
         CHECK(m.type == mycv::U8C3);
         CHECK(m.rows == 24 && m.cols == 32);
     }
+}
+
+// 12. findContours：数量、外接矩形、面积和 OpenCV 对齐
+static mycv::Mat fromCvU8(const cv::Mat &m) {
+    mycv::Mat out;
+    out.create(m.rows, m.cols, mycv::U8C1);
+    for (int r = 0; r < m.rows; ++r)
+        std::memcpy(out.ptr(r), m.ptr<uint8_t>(r), static_cast<std::size_t>(m.cols));
+    return out;
+}
+
+static void compareContours(const char *name, const cv::Mat &cvBin) {
+    mycv::Mat bin = fromCvU8(cvBin);
+
+    const auto mine = mycv::findContours(bin);
+    std::vector<std::vector<cv::Point>> theirs;
+    cv::findContours(cvBin.clone(), theirs, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+    CHECK(mine.size() == theirs.size());
+    if (mine.size() != theirs.size()) {
+        std::printf("  %-16s 数量 mycv=%zu cv=%zu\n", name, mine.size(), theirs.size());
+        return;
+    }
+
+    // 两边扫描顺序不同（OpenCV 从下往上），按框左上角排序后再逐个比
+    struct Entry {
+        int x, y, w, h;
+        double area;
+    };
+    std::vector<Entry> a, b;
+    for (const auto &c : mine) {
+        const mycv::Rect r = mycv::boundingRect(c);
+        a.push_back({r.x, r.y, r.width, r.height, mycv::contourArea(c)});
+    }
+    for (const auto &c : theirs) {
+        const cv::Rect r = cv::boundingRect(c);
+        b.push_back({r.x, r.y, r.width, r.height, cv::contourArea(c)});
+    }
+    auto less = [](const Entry &p, const Entry &q) { return p.y != q.y ? p.y < q.y : p.x < q.x; };
+    std::sort(a.begin(), a.end(), less);
+    std::sort(b.begin(), b.end(), less);
+
+    int worstArea = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        CHECK(a[i].x == b[i].x);
+        CHECK(a[i].y == b[i].y);
+        CHECK(a[i].w == b[i].w);
+        CHECK(a[i].h == b[i].h);
+        const int da = static_cast<int>(std::lround(std::abs(a[i].area - b[i].area)));
+        if (da > worstArea) worstArea = da;
+    }
+    std::printf("  %-16s %zu 条，框全一致，面积最大差 %d 像素\n", name, mine.size(), worstArea);
+}
+
+static void testContours() {
+    auto make = [](int h, int w) { return cv::Mat::zeros(h, w, CV_8UC1); };
+
+    { // 实心矩形
+        cv::Mat m = make(20, 30);
+        cv::rectangle(m, {5, 4}, {20, 14}, cv::Scalar(255), -1);
+        compareContours("实心矩形", m);
+    }
+    { // 两个分离物体
+        cv::Mat m = make(30, 40);
+        cv::rectangle(m, {2, 2}, {12, 12}, cv::Scalar(255), -1);
+        cv::circle(m, {30, 20}, 6, cv::Scalar(255), -1);
+        compareContours("两个物体", m);
+    }
+    { // L 形
+        cv::Mat m = make(20, 20);
+        cv::rectangle(m, {2, 2}, {15, 8}, cv::Scalar(255), -1);
+        cv::rectangle(m, {2, 8}, {7, 16}, cv::Scalar(255), -1);
+        compareContours("L 形", m);
+    }
+    { // 带孔
+        cv::Mat m = make(24, 24);
+        cv::rectangle(m, {3, 3}, {20, 20}, cv::Scalar(255), -1);
+        cv::rectangle(m, {8, 8}, {14, 14}, cv::Scalar(0), -1);
+        compareContours("带孔方环", m);
+    }
+    { // 单像素
+        cv::Mat m = make(10, 10);
+        m.at<uint8_t>(5, 5) = 255;
+        compareContours("单像素", m);
+    }
+    { // 三个物体带噪声
+        cv::Mat m = make(40, 50);
+        cv::rectangle(m, {4, 4}, {16, 16}, cv::Scalar(255), -1);
+        cv::circle(m, {35, 12}, 7, cv::Scalar(255), -1);
+        cv::rectangle(m, {20, 26}, {44, 36}, cv::Scalar(255), -1);
+        for (int i = 0; i < 6; ++i)
+            m.at<uint8_t>(2 + i * 6, 24 + i * 3) = 255;
+        compareContours("三个物体+噪声", m);
+    }
+}
+
+// 13. convexHull / minAreaRect
+struct NormRR {
+    double cx, cy, w, h, ang;
+};
+
+// 统一成"width 是长边，angle 落在 [0,180)"，两边才好比
+static NormRR normalizeRR(double cx, double cy, double w, double h, double ang) {
+    if (h > w) {
+        std::swap(w, h);
+        ang += 90.0;
+    }
+    ang = std::fmod(ang, 180.0);
+    if (ang < 0) ang += 180.0;
+    return {cx, cy, w, h, ang};
+}
+
+static double angleGap(double a, double b) {
+    double d = std::fabs(a - b);
+    if (d > 90.0) d = 180.0 - d; // 角度在 0/180 附近时是同一个方向
+    return d;
+}
+
+static void cmpRect(const char *name, const std::vector<mycv::Point> &pts) {
+    std::vector<cv::Point> cvpts;
+    cvpts.reserve(pts.size());
+    for (const auto &p : pts)
+        cvpts.emplace_back(p.x, p.y);
+
+    const cv::RotatedRect cr = cv::minAreaRect(cvpts);
+    const mycv::RotatedRect mr = mycv::minAreaRect(pts);
+
+    const NormRR a = normalizeRR(mr.center.x, mr.center.y, mr.size.width, mr.size.height, mr.angle);
+    const NormRR b = normalizeRR(cr.center.x, cr.center.y, cr.size.width, cr.size.height, cr.angle);
+
+    // minAreaRect 可能存在多个等价解（三角形沿任一条边扣出的矩形面积相同），
+    // 所以按定义验证：面积一致 + 所有点都在矩形内
+    const double areaMine = a.w * a.h;
+    const double areaCv = b.w * b.h;
+    const double dArea = std::fabs(areaMine - areaCv);
+
+    const double t = a.ang * M_PI / 180.0;
+    const double ct = std::cos(t), st = std::sin(t);
+    double worstOut = 0.0;
+    for (const auto &p : pts) {
+        const double dx = p.x - a.cx, dy = p.y - a.cy;
+        const double u = dx * ct + dy * st; // 沿长边方向
+        const double v = -dx * st + dy * ct; // 沿短边方向
+        const double ou = std::fabs(u) - a.w * 0.5;
+        const double ov = std::fabs(v) - a.h * 0.5;
+        worstOut = std::max(worstOut, std::max(ou, ov));
+    }
+
+    std::printf("  %-16s 面积 %.1f / cv %.1f (差 %.2f) 最大出界 %.2f  "
+                "尺寸(%.1f,%.1f) 角%.1f\n",
+                name, areaMine, areaCv, dArea, worstOut, a.w, a.h, a.ang);
+    CHECK(dArea < 1.0);
+    CHECK(worstOut < 0.6); // 整数点取整误差
+
+    // 凸包点数也要一致
+    const auto hullMine = mycv::convexHull(pts);
+    std::vector<cv::Point> hullCv;
+    cv::convexHull(cvpts, hullCv);
+    CHECK(hullMine.size() == hullCv.size());
+}
+
+static void testMinAreaRect() {
+    // 轴对齐矩形
+    cmpRect("轴对齐 50x30", {{10, 10}, {60, 10}, {60, 40}, {10, 40}});
+
+    // 旋转 30 度的 50x20 矩形（整数点）
+    cmpRect("旋转 30 度", {{83, 79}, {127, 104}, {117, 121}, {73, 96}});
+
+    // 三角形
+    cmpRect("三角形", {{0, 0}, {40, 0}, {0, 30}});
+
+    // 正方形
+    cmpRect("正方形", {{0, 0}, {20, 0}, {20, 20}, {0, 20}});
+
+    // 圆上的点（16 边近似）
+    {
+        std::vector<mycv::Point> pts;
+        for (int i = 0; i < 16; ++i) {
+            const double t = i * M_PI / 8.0;
+            pts.push_back({static_cast<int>(std::lround(100 + 40 * std::cos(t))),
+                           static_cast<int>(std::lround(100 + 40 * std::sin(t)))});
+        }
+        cmpRect("16 边形近似圆", pts);
+    }
+
+    // 一堆带内部点的乱序点（凸包要能剔除内部点）
+    {
+        std::mt19937 rng(9u);
+        std::uniform_int_distribution<int> dist(0, 99);
+        std::vector<mycv::Point> pts;
+        for (int i = 0; i < 200; ++i)
+            pts.push_back({dist(rng), dist(rng)});
+        cmpRect("随机 200 点", pts);
+    }
+}
+
+static void testCanny() {
+    // 三种输入：文件里的灰度图、随机噪声（边最多）、台阶 + 弱台阶（考滞后阈值）
+    mycv::Mat pgm = mycv::imread(dataPath("test_gray.pgm"));
+    CHECK(!pgm.empty());
+
+    mycv::Mat bgr = makeRandomBGR(200, 300, 77u);
+    mycv::Mat noise;
+    noise.create(200, 300, mycv::U8C1);
+    for (int r = 0; r < 200; ++r) {
+        const uint8_t *s = bgr.ptr(r);
+        uint8_t *d = noise.ptr(r);
+        for (int i = 0; i < 300; ++i)
+            d[i] = s[i * 3 + 1];
+    }
+
+    mycv::Mat step;
+    step.create(60, 80, mycv::U8C1);
+    for (int r = 0; r < 60; ++r) {
+        uint8_t *d = step.ptr(r);
+        for (int c = 0; c < 80; ++c)
+            d[c] = (c >= 10 && c < 40) ? 200 : ((c >= 50 && c < 70) ? 3 : 0);
+    }
+
+    mycv::Mat images[] = {pgm, noise, step};
+    cv::Mat refs[] = {cv::Mat(pgm.rows, pgm.cols, CV_8UC1, pgm.data, pgm.step),
+                      cv::Mat(noise.rows, noise.cols, CV_8UC1, noise.data, noise.step),
+                      cv::Mat(step.rows, step.cols, CV_8UC1, step.data, step.step)};
+
+    // low 管连接、high 管种子：阈值扫一串，L1 和 L2 都要对上
+    const double pairs[][2] = {{20, 60}, {60, 180}, {120, 360}, {250, 750}, {5, 500}};
+    for (int k = 0; k < 3; ++k) {
+        for (const auto &p : pairs) {
+            mycv::Mat mine = mycv::canny(images[k], p[0], p[1]);
+            cv::Mat ref;
+            cv::Canny(refs[k], ref, p[0], p[1]);
+            CHECK(maxDiff(mine, ref) == 0);
+        }
+
+        mycv::Mat mine = mycv::canny(images[k], 30, 90, true);
+        cv::Mat ref;
+        cv::Canny(refs[k], ref, 30, 90, 3, true);
+        CHECK(maxDiff(mine, ref) == 0);
+    }
+
+    // 浮点阈值也是 cvFloor
+    {
+        mycv::Mat mine = mycv::canny(pgm, 50.5, 100.2);
+        cv::Mat ref;
+        cv::Canny(refs[0], ref, 50.5, 100.2);
+        CHECK(maxDiff(mine, ref) == 0);
+    }
+
+    // 多通道、空图都要抛
+    int thrown = 0;
+    try {
+        mycv::canny(bgr, 50, 150);
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    try {
+        mycv::canny(mycv::Mat(), 50, 150);
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    CHECK(thrown == 2);
+}
+
+static void testGaussian() {
+    mycv::Mat bgr = makeRandomBGR(120, 160, 31u);
+    cv::Mat bgrRef(120, 160, CV_8UC3, bgr.data, bgr.step);
+
+    mycv::Mat gray;
+    gray.create(120, 160, mycv::U8C1);
+    for (int r = 0; r < 120; ++r) {
+        const uint8_t *s = bgr.ptr(r);
+        uint8_t *d = gray.ptr(r);
+        for (int i = 0; i < 160; ++i)
+            d[i] = s[i * 3 + 1];
+    }
+    cv::Mat grayRef(120, 160, CV_8UC1, gray.data, gray.step);
+
+    // ksize × sigma：sigma=0 的 3/5/7/9 走写死的整数核，其余走 exp 公式 + 误差扩散定点化
+    const int sizes[] = {3, 5, 7, 9, 11, 15};
+    const double sigmas[] = {0.0, 0.8, 1.2, 1.5, 2.5};
+    for (int ks : sizes) {
+        for (double sg : sigmas) {
+            mycv::Mat mg = mycv::gaussianBlur(gray, {ks, ks}, sg);
+            cv::Mat rg;
+            cv::GaussianBlur(grayRef, rg, cv::Size(ks, ks), sg);
+            CHECK(maxDiff(mg, rg) == 0);
+
+            if (sg == 0.0 || sg == 1.2) { // 彩色少跑几组省时间
+                mycv::Mat mc = mycv::gaussianBlur(bgr, {ks, ks}, sg);
+                cv::Mat rc;
+                cv::GaussianBlur(bgrRef, rc, cv::Size(ks, ks), sg);
+                CHECK(maxDiff(mc, rc) == 0);
+            }
+        }
+    }
+
+    // 非方形核 + sigmaY 缺省取 sigmaX / 显式给 sigmaY
+    {
+        mycv::Mat m1 = mycv::gaussianBlur(gray, {5, 3}, 1.1);
+        cv::Mat r1;
+        cv::GaussianBlur(grayRef, r1, cv::Size(5, 3), 1.1);
+        CHECK(maxDiff(m1, r1) == 0);
+
+        mycv::Mat m2 = mycv::gaussianBlur(gray, {7, 5}, 0, 1.4);
+        cv::Mat r2;
+        cv::GaussianBlur(grayRef, r2, cv::Size(7, 5), 0, 1.4);
+        CHECK(maxDiff(m2, r2) == 0);
+    }
+
+    // 单行 / 单列 / 单点：那一维的核要缩成 1，否则 reflect101 在 n=1 上原地打转
+    {
+        mycv::Mat row, col;
+        row.create(1, 37, mycv::U8C1);
+        col.create(37, 1, mycv::U8C1);
+        for (int i = 0; i < 37; ++i) {
+            row.ptr(0)[i] = static_cast<uint8_t>(i * 7);
+            col.ptr(i)[0] = static_cast<uint8_t>(i * 11);
+        }
+        cv::Mat rowRef(1, 37, CV_8UC1, row.data, row.step);
+        cv::Mat colRef(37, 1, CV_8UC1, col.data, col.step);
+
+        mycv::Mat mr = mycv::gaussianBlur(row, {5, 5}, 0);
+        cv::Mat rr;
+        cv::GaussianBlur(rowRef, rr, cv::Size(5, 5), 0);
+        CHECK(maxDiff(mr, rr) == 0);
+
+        mycv::Mat mc = mycv::gaussianBlur(col, {5, 5}, 0);
+        cv::Mat rc;
+        cv::GaussianBlur(colRef, rc, cv::Size(5, 5), 0);
+        CHECK(maxDiff(mc, rc) == 0);
+    }
+
+    // 偶数 ksize、比图还大的 ksize 都要抛
+    int thrown = 0;
+    try {
+        mycv::gaussianBlur(gray, {4, 4}, 0);
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    try {
+        mycv::gaussianBlur(gray, {999, 999}, 0);
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    CHECK(thrown == 2);
+}
+
+static void testMedian() {
+    mycv::Mat bgr = makeRandomBGR(120, 160, 41u);
+    cv::Mat bgrRef(120, 160, CV_8UC3, bgr.data, bgr.step);
+
+    mycv::Mat gray;
+    gray.create(120, 160, mycv::U8C1);
+    for (int r = 0; r < 120; ++r) {
+        const uint8_t *s = bgr.ptr(r);
+        uint8_t *d = gray.ptr(r);
+        for (int i = 0; i < 160; ++i)
+            d[i] = s[i * 3 + 1];
+    }
+    cv::Mat grayRef(120, 160, CV_8UC1, gray.data, gray.step);
+
+    // 椒盐噪声：中值的看家场景
+    mycv::Mat salt = gray.clone();
+    cv::Mat saltRef = grayRef.clone();
+    std::mt19937 rng(5);
+    for (int r = 0; r < 120; ++r) {
+        uint8_t *d = salt.ptr(r);
+        for (int c = 0; c < 160; ++c) {
+            const int u = static_cast<int>(rng() & 0xffff);
+            if (u < 3277)
+                d[c] = 0;
+            else if (u > 62258)
+                d[c] = 255;
+        }
+    }
+    saltRef = cv::Mat(120, 160, CV_8UC1, salt.data, salt.step);
+
+    const int sizes[] = {1, 3, 5, 7, 9, 15};
+    for (int ks : sizes) {
+        for (int k = 0; k < 3; ++k) {
+            const mycv::Mat &mi = (k == 0) ? gray : (k == 1 ? bgr : salt);
+            const cv::Mat &ri = (k == 0) ? grayRef : (k == 1 ? bgrRef : saltRef);
+            mycv::Mat m = mycv::medianBlur(mi, ks);
+            cv::Mat r;
+            cv::medianBlur(ri, r, ks);
+            CHECK(maxDiff(m, r) == 0);
+        }
+    }
+
+    // 退化尺寸：REPLICATE 边界下都能算（1×N、N×1、1×1、2×2）
+    {
+        mycv::Mat row, col, dot, two;
+        row.create(1, 37, mycv::U8C1);
+        col.create(37, 1, mycv::U8C1);
+        dot.create(1, 1, mycv::U8C1);
+        two.create(2, 2, mycv::U8C1);
+        for (int i = 0; i < 37; ++i) {
+            row.ptr(0)[i] = static_cast<uint8_t>(i * 7);
+            col.ptr(i)[0] = static_cast<uint8_t>(i * 11);
+        }
+        dot.ptr(0)[0] = 123;
+        two.ptr(0)[0] = 5;
+        two.ptr(0)[1] = 250;
+        two.ptr(1)[0] = 40;
+        two.ptr(1)[1] = 90;
+
+        const mycv::Mat *ms[] = {&row, &col, &dot, &two};
+        for (const auto *m : ms) {
+            cv::Mat rr(m->rows, m->cols, CV_8UC1, m->data, m->step);
+            mycv::Mat mine = mycv::medianBlur(*m, 5);
+            cv::Mat ref;
+            cv::medianBlur(rr, ref, 5);
+            CHECK(maxDiff(mine, ref) == 0);
+        }
+    }
+
+    // ksize 0 / 偶数都要抛；ksize==1 是拷贝
+    int thrown = 0;
+    try {
+        mycv::medianBlur(gray, 0);
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    try {
+        mycv::medianBlur(gray, 4);
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    CHECK(thrown == 2);
+    CHECK(maxDiff(mycv::medianBlur(gray, 1), gray) == 0);
+}
+
+// 两幅 CV_16S 图逐元素比，返回最大绝对差
+static int maxDiff16(const mycv::Mat &a, const cv::Mat &b) {
+    if (a.rows != b.rows || a.cols != b.cols) return -1;
+    int worst = 0;
+    for (int r = 0; r < a.rows; ++r) {
+        const int16_t *pa = a.ptr<int16_t>(r);
+        const int16_t *pb = b.ptr<int16_t>(r);
+        for (int c = 0; c < a.cols; ++c) {
+            const int d = pa[c] > pb[c] ? pa[c] - pb[c] : pb[c] - pa[c];
+            if (d > worst) worst = d;
+        }
+    }
+    return worst;
+}
+
+static void testGradientFamily() {
+    mycv::Mat bgr = makeRandomBGR(40, 50, 53u);
+    cv::Mat bgrRef(40, 50, CV_8UC3, bgr.data, bgr.step);
+
+    mycv::Mat gray;
+    gray.create(40, 50, mycv::U8C1);
+    for (int r = 0; r < 40; ++r) {
+        const uint8_t *s = bgr.ptr(r);
+        uint8_t *d = gray.ptr(r);
+        for (int i = 0; i < 50; ++i) d[i] = s[i * 3 + 1];
+    }
+    cv::Mat grayRef(40, 50, CV_8UC1, gray.data, gray.step);
+
+    // Scharr：3x3 核 [-3,0,3;-10,0,10;-3,0,3]，核和 0、不归一化，8U 输出照样饱和
+    for (int d = 0; d <= 1; ++d) {
+        const int dx = 1 - d, dy = d;
+        mycv::Mat mg = mycv::scharr(gray, dx, dy);
+        cv::Mat rg;
+        cv::Scharr(grayRef, rg, CV_8U, dx, dy);
+        CHECK(maxDiff(mg, rg) == 0);
+
+        mycv::Mat mc = mycv::scharr(bgr, dx, dy);
+        cv::Mat rc;
+        cv::Scharr(bgrRef, rc, CV_8U, dx, dy);
+        CHECK(maxDiff(mc, rc) == 0);
+    }
+
+    // Laplacian：ksize=1 是四邻域，ksize=3 是八邻域
+    for (int ks : {1, 3}) {
+        mycv::Mat mg = mycv::laplacian(gray, ks);
+        cv::Mat rg;
+        cv::Laplacian(grayRef, rg, CV_8U, ks);
+        CHECK(maxDiff(mg, rg) == 0);
+
+        mycv::Mat mc = mycv::laplacian(bgr, ks);
+        cv::Mat rc;
+        cv::Laplacian(bgrRef, rc, CV_8U, ks);
+        CHECK(maxDiff(mc, rc) == 0);
+    }
+
+    // spatialGradient：输出 16 位有符号，不饱和
+    {
+        mycv::Mat mdx, mdy;
+        mycv::spatialGradient(gray, mdx, mdy);
+        cv::Mat rdx, rdy;
+        cv::spatialGradient(grayRef, rdx, rdy);
+        CHECK(mdx.type == mycv::S16C1 && mdy.type == mycv::S16C1);
+        CHECK(maxDiff16(mdx, rdx) == 0);
+        CHECK(maxDiff16(mdy, rdy) == 0);
+
+        // 随机图上梯度最大值必须超过 255，否则说明被截断成 8 位了
+        int peak = 0;
+        for (int r = 0; r < mdx.rows; ++r) {
+            const int16_t *p = mdx.ptr<int16_t>(r);
+            for (int c = 0; c < mdx.cols; ++c) {
+                const int v = p[c] > 0 ? p[c] : -p[c];
+                if (v > peak) peak = v;
+            }
+        }
+        CHECK(peak > 255);
+    }
+
+    // 非法参数：scharr 的 dx+dy、laplacian 的 ksize、spatialGradient 的多通道
+    int thrown = 0;
+    try {
+        mycv::scharr(gray, 1, 1);
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    try {
+        mycv::laplacian(gray, 5);
+    } catch (const std::exception &) {
+        ++thrown;
+    }
+    {
+        mycv::Mat a, b;
+        try {
+            mycv::spatialGradient(bgr, a, b);
+        } catch (const std::exception &) {
+            ++thrown;
+        }
+    }
+    CHECK(thrown == 3);
 }
 
 int main() {
@@ -692,9 +1224,15 @@ int main() {
     testThreshold();
     testConvolve();
     testBlurSobel();
+    testCanny();
+    testGaussian();
+    testMedian();
+    testGradientFamily();
     testMorph();
     testDraw();
     testJpeg();
+    testContours();
+    testMinAreaRect();
 
     if (g_failed == 0) {
         std::printf("test_compare_opencv: all passed\n");
