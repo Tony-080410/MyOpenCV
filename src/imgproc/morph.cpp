@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
+#include <vector>
 
 #include <mycv/core/check.hpp>
 #include <mycv/core/mat.hpp>
@@ -69,26 +70,75 @@ template <bool Erode> Mat morphImpl(const Mat &src, const Mat &kernel) {
     const int ax = kernel.cols / 2;
     const int ay = kernel.rows / 2;
     const int cn = channels(src.type);
+    const int H = src.rows, W = src.cols;
+    const int kh = kernel.rows, kw = kernel.cols;
 
     Mat dst;
-    dst.create(src.rows, src.cols, src.type);
+    dst.create(H, W, src.type);
 
-    for (int y = 0; y < src.rows; ++y) {
+    const int yInnerLo = ay, yInnerHi = H - ay;
+    const int xInnerLo = ax, xInnerHi = W - ax;
+
+    std::vector<const uint8_t *> srows(static_cast<std::size_t>(kh));
+    std::vector<const uint8_t *> krows(static_cast<std::size_t>(kh));
+
+    // 矩形核（全 1）最常见，特化之后内层是纯 min/max 链，可以被向量化
+    bool fullKernel = true;
+    for (int ky = 0; ky < kh && fullKernel; ++ky) {
+        const uint8_t *krow = kernel.ptr(ky);
+        for (int kx = 0; kx < kw; ++kx) {
+            if (krow[kx] == 0) {
+                fullKernel = false;
+                break;
+            }
+        }
+    }
+
+    for (int y = 0; y < H; ++y) {
         uint8_t *d = dst.ptr(y);
-        for (int x = 0; x < src.cols; ++x) {
+        const bool innerY = (y >= yInnerLo && y < yInnerHi);
+
+        // 每行只取一次 kh 个行指针，不再逐像素调用 src.ptr()（2026.11.21优化）
+        for (int ky = 0; ky < kh; ++ky) {
+            krows[ky] = kernel.ptr(ky);
+            const int sy = y + ky - ay;
+            srows[ky] = (sy < 0 || sy >= H) ? nullptr : src.ptr(sy); // 越界行不反射
+        }
+
+        for (int x = 0; x < W; ++x) {
+            const bool inner = innerY && (x >= xInnerLo && x < xInnerHi);
             for (int c = 0; c < cn; ++c) {
                 int v = Erode ? 255 : 0; // erode 从最大开始找最小，dilate 反之
-                for (int ky = 0; ky < kernel.rows; ++ky) {
-                    const int sy = y + ky - ay;
-                    if (sy < 0 || sy >= src.rows) continue; // 越界直接跳过，不反射
-                    const uint8_t *krow = kernel.ptr(ky);
-                    const uint8_t *srow = src.ptr(sy);
-                    for (int kx = 0; kx < kernel.cols; ++kx) {
-                        if (krow[kx] == 0) continue; // 核里是 0 的位置不参与
-                        const int sx = x + kx - ax;
-                        if (sx < 0 || sx >= src.cols) continue;
-                        const int p = srow[sx * cn + c];
-                        v = Erode ? std::min(v, p) : std::max(v, p);
+                if (inner && fullKernel) {
+                    for (int ky = 0; ky < kh; ++ky) {
+                        const uint8_t *srow = srows[ky];
+                        for (int kx = 0; kx < kw; ++kx) {
+                            const int p = srow[(x + kx - ax) * cn + c];
+                            v = Erode ? std::min(v, p) : std::max(v, p);
+                        }
+                    }
+                } else if (inner) {
+                    for (int ky = 0; ky < kh; ++ky) {
+                        const uint8_t *srow = srows[ky];
+                        const uint8_t *krow = krows[ky];
+                        for (int kx = 0; kx < kw; ++kx) {
+                            if (krow[kx] == 0) continue; // 核里是 0 的位置不参与
+                            const int p = srow[(x + kx - ax) * cn + c];
+                            v = Erode ? std::min(v, p) : std::max(v, p);
+                        }
+                    }
+                } else {
+                    for (int ky = 0; ky < kh; ++ky) {
+                        const uint8_t *srow = srows[ky];
+                        if (!srow) continue;
+                        const uint8_t *krow = krows[ky];
+                        for (int kx = 0; kx < kw; ++kx) {
+                            if (krow[kx] == 0) continue;
+                            const int sx = x + kx - ax;
+                            if (sx < 0 || sx >= W) continue;
+                            const int p = srow[sx * cn + c];
+                            v = Erode ? std::min(v, p) : std::max(v, p);
+                        }
                     }
                 }
                 d[x * cn + c] = static_cast<uint8_t>(v);
